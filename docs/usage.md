@@ -4,12 +4,12 @@ Practical usage for end users and operators, aligned to current MVP behavior.
 
 ## Current status
 
-| Capability           | Status                                           |
-| -------------------- | ------------------------------------------------ |
-| Local FalkorDB mode  | Supported and test-validated                     |
-| Remote FalkorDB mode | Config-validated but partial runtime wiring      |
-| Embedding search     | Optional local embeddings, with FTS fallback     |
-| Proactive warnings   | Code exists, not wired into active runtime hooks |
+| Capability           | Status                                                      |
+| -------------------- | ----------------------------------------------------------- |
+| Local FalkorDB mode  | Supported and test-validated                                |
+| Remote FalkorDB mode | Runtime-supported, hardening and E2E validation in progress |
+| Embedding search     | Optional local embeddings, with FTS fallback                |
+| Proactive warnings   | Code exists, not wired into active runtime hooks            |
 
 ## Prerequisites
 
@@ -65,7 +65,7 @@ Local (effective now):
 }
 ```
 
-Remote (schema-valid, partial in runtime path):
+Remote (runtime-supported, production hardening in progress):
 
 ```ts
 {
@@ -100,6 +100,29 @@ export MEMORY_EMBEDDINGS="off"
    - `memory_search` to scan relevant memories
    - `memory_get` to fetch details by UUID
 4. Confirm memory writes by checking that new project-scoped entities appear in subsequent `memory_search` results.
+
+## Remote quickstart workflow (advanced)
+
+1. Set env vars:
+
+```bash
+export MEMORY_GRAPH_MODE="remote"
+export MEMORY_GRAPH_HOST="falkordb.example.internal"
+export MEMORY_GRAPH_PORT="6379"
+export MEMORY_GRAPH_PASSWORD="..."
+export MEMORY_GRAPH_TLS="true"
+export MEMORY_EMBEDDINGS="off"
+```
+
+2. Start OpenCode and verify plugin boot succeeds.
+3. Run `memory_search` and `memory_get` to validate read/write behavior.
+4. Optionally run remote harness test:
+
+```bash
+RUN_REMOTE_GRAPH_TEST=1 bun test src/graph/remote.test.ts
+```
+
+Note: remote mode is supported but still requires production soak validation.
 
 ## Operator checks
 
@@ -150,6 +173,13 @@ export MEMORY_EMBEDDINGS="off"
 ## Current implementation caveats
 
 - Local mode is the only end-to-end tested integration path.
-- Plugin bootstrap hardcodes local storage mode (`src/index.ts:15`), completely ignoring user remote config.
-- Remote connect path currently accepts `tls` in config type but does not pass TLS options into `FalkorDB.connect`.
+- Remote mode relies on env-driven runtime config (`MEMORY_GRAPH_MODE`, host/port/password/tls) rather than host config file wiring.
 - Proactive warning and working-tier modules exist but are not connected to active runtime hooks yet.
+
+## Remote production hardening checklist
+
+- Use TLS-enabled remote endpoint (`MEMORY_GRAPH_TLS=true`).
+- Use dedicated credentials and rotate `MEMORY_GRAPH_PASSWORD`.
+- Restrict network access to trusted hosts only.
+- Run remote harness test (`RUN_REMOTE_GRAPH_TEST=1`) in CI or pre-prod.
+- Run soak test with representative write/search workload before production cutover.

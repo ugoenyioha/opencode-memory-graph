@@ -19,7 +19,7 @@ The plugin hooks into the host's session lifecycle to automatically extract and 
 FalkorDB is the sole storage engine for both modes. This eliminates impedance mismatch — same Cypher queries, same client library (`falkordb` npm package), same graph schema.
 
 > [!IMPORTANT]
-> **Current MVP implementation status:** plugin startup currently initializes storage with `mode: "local"` from env/default path (`MEMORY_GRAPH_PATH`), so remote mode is not fully wired through runtime initialization yet. Treat remote as partial until bootstrap wiring is completed and end-to-end tested.
+> **Current MVP implementation status:** plugin startup uses env-driven runtime config. Local mode is the default, and remote mode is available when `MEMORY_GRAPH_MODE=remote` with remote host credentials. Remote still requires production hardening/soak validation.
 
 ### Local mode
 
@@ -49,7 +49,7 @@ const db = await FalkorDB.connect({
 ```
 
 > [!NOTE]
-> Remote config schema currently enforces `tls: true` and a non-loopback host. In the current client implementation, the config type accepts `tls` but TLS options are not yet passed into `FalkorDB.connect`.
+> Remote config schema currently enforces `tls: true` and a non-loopback host. Client connect passes `socket.tls` through to `FalkorDB.connect`.
 
 ### Configuration
 

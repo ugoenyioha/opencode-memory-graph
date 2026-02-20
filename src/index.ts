@@ -1,6 +1,6 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
-import { config } from "./config";
+import { runtime } from "./config";
 import { merge } from "./extraction";
 import { connect } from "./graph/client";
 import { schema } from "./graph/schema";
@@ -10,14 +10,7 @@ import { neutralize, redact, sanitize } from "./security/redact";
 
 export const MemoryPlugin: Plugin = async (ctx) => {
   const projectID = ctx.directory;
-  const cfg = config({
-    storage: {
-      mode: "local",
-      path: process.env.MEMORY_GRAPH_PATH ?? "~/.opencode/memory",
-    },
-    embeddings: process.env.MEMORY_EMBEDDINGS === "local" ? "local" : "off",
-    default_scope: "project",
-  });
+  const cfg = runtime();
 
   process.env.MEMORY_EMBEDDINGS = cfg.embeddings === "local" ? "local" : "off";
 

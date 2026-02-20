@@ -68,7 +68,7 @@ export MEMORY_EMBEDDINGS="off" # use "local" to enable local embeddings
 ```
 
 ```ts
-// Remote (schema-valid, but currently partial in runtime wiring)
+// Remote (runtime-supported, production-hardening in progress)
 {
   storage: {
     mode: "remote",
@@ -84,12 +84,12 @@ export MEMORY_EMBEDDINGS="off" # use "local" to enable local embeddings
 
 ### Local vs remote status
 
-| Area                                   | Local                  | Remote                                                                    |
-| -------------------------------------- | ---------------------- | ------------------------------------------------------------------------- |
-| Config schema validation               | Implemented            | Implemented (`tls: true`, non-local host required)                        |
-| Plugin startup wiring (`src/index.ts`) | Implemented            | Not wired (startup currently forces `storage.mode: "local"`)              |
-| Graph client connect path              | Implemented and tested | Implemented, but TLS option is not currently passed to `FalkorDB.connect` |
-| Integration test coverage              | Covered (`bun test`)   | Not end-to-end covered                                                    |
+| Area                                   | Local                  | Remote                                             |
+| -------------------------------------- | ---------------------- | -------------------------------------------------- |
+| Config schema validation               | Implemented            | Implemented (`tls: true`, non-local host required) |
+| Plugin startup wiring (`src/index.ts`) | Implemented            | Implemented via env-driven runtime config          |
+| Graph client connect path              | Implemented and tested | Implemented (socket `tls` is passed through)       |
+| Integration test coverage              | Covered (`bun test`)   | Not end-to-end covered                             |
 
 ### Security defaults (current)
 
@@ -100,7 +100,7 @@ export MEMORY_EMBEDDINGS="off" # use "local" to enable local embeddings
 ### Known limitations
 
 - Local mode is the only fully exercised workflow today.
-- Remote mode is partially implemented and not fully wired through plugin bootstrap yet.
+- Remote mode is runtime-supported but still needs production soak/E2E validation in a real remote deployment.
 - Proactive warning surfacing and working-tier loading modules exist, but are not wired into active runtime hooks.
 - Tool usage tracking hook exists as a TODO placeholder.
 

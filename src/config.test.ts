@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { config } from "./config";
+import { config, runtime } from "./config";
 
 describe("security baseline config", () => {
   test("defaults to local mode, project scope, and embeddings off", () => {
@@ -81,5 +81,33 @@ describe("security baseline config", () => {
         ],
       },
     ]);
+  });
+
+  test("runtime helper selects local mode by default", () => {
+    delete process.env.MEMORY_GRAPH_MODE;
+    delete process.env.MEMORY_GRAPH_PATH;
+    const out = runtime();
+    expect(out.storage.mode).toBe("local");
+  });
+
+  test("runtime helper parses remote mode from env", () => {
+    process.env.MEMORY_GRAPH_MODE = "remote";
+    process.env.MEMORY_GRAPH_HOST = "falkordb.example.internal";
+    process.env.MEMORY_GRAPH_PORT = "6380";
+    process.env.MEMORY_GRAPH_PASSWORD = "secret";
+    process.env.MEMORY_GRAPH_TLS = "true";
+
+    const out = runtime();
+    expect(out.storage.mode).toBe("remote");
+    if (out.storage.mode !== "remote") return;
+    expect(out.storage.host).toBe("falkordb.example.internal");
+    expect(out.storage.port).toBe(6380);
+    expect(out.storage.tls).toBe(true);
+
+    delete process.env.MEMORY_GRAPH_MODE;
+    delete process.env.MEMORY_GRAPH_HOST;
+    delete process.env.MEMORY_GRAPH_PORT;
+    delete process.env.MEMORY_GRAPH_PASSWORD;
+    delete process.env.MEMORY_GRAPH_TLS;
   });
 });

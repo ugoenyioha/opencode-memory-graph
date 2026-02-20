@@ -47,6 +47,7 @@ export async function connect(config: Config = defaults): Promise<GraphClient> {
       socket: {
         host: config.host ?? "localhost",
         port: config.port ?? 6379,
+        tls: config.tls,
       },
       password: config.password,
     });

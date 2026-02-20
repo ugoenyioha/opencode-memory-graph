@@ -66,3 +66,30 @@ export type ConfigPack = string | Pack;
 export function config(input: unknown): Config {
   return ConfigSchema.parse(input ?? {});
 }
+
+export function runtime(): Config {
+  const mode = process.env.MEMORY_GRAPH_MODE === "remote" ? "remote" : "local";
+  const storage =
+    mode === "remote"
+      ? {
+          mode: "remote" as const,
+          host: process.env.MEMORY_GRAPH_HOST,
+          port: process.env.MEMORY_GRAPH_PORT
+            ? Number(process.env.MEMORY_GRAPH_PORT)
+            : 6379,
+          password: process.env.MEMORY_GRAPH_PASSWORD,
+          tls: process.env.MEMORY_GRAPH_TLS === "false" ? false : true,
+        }
+      : {
+          mode: "local" as const,
+          path: process.env.MEMORY_GRAPH_PATH ?? "~/.opencode/memory",
+        };
+
+  const embeddings =
+    process.env.MEMORY_EMBEDDINGS === "local" ? "local" : "off";
+  return config({
+    storage,
+    embeddings,
+    default_scope: "project",
+  });
+}
