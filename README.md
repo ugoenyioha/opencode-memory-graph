@@ -101,7 +101,8 @@ export MEMORY_EMBEDDINGS="off" # use "local" to enable local embeddings
 
 - Local mode is the only fully exercised workflow today.
 - Remote mode is runtime-supported but still needs production soak/E2E validation in a real remote deployment.
-- Proactive warning surfacing and working-tier loading modules exist, but are not wired into active runtime hooks.
+- Proactive warning surfacing is runtime-active when `MEMORY_GRAPH_PROACTIVE=1`.
+- Working-tier loading is active in `experimental.chat.system.transform` with a capped budget.
 - Tool usage tracking hook exists as a TODO placeholder.
 
 ### Troubleshooting (exact signals)
@@ -119,7 +120,7 @@ For deeper operator guidance, see `docs/usage.md`.
 
 ## Why this exists
 
-Every AI coding assistant forgets everything between sessions. The current state of the art is flat markdown files (CLAUDE.md, .cursor/rules/, memory-bank/) or simple key-value stores. None of them can answer questions like:
+Many AI coding assistants still lose context between sessions. There is now a broad ecosystem of memory systems (for example Mem0, Zep/Graphiti, Letta/MemGPT, LangGraph memory stores, Redis-backed long-term memory layers), but in day-to-day developer workflows this often still falls back to flat markdown files (CLAUDE.md, `.cursor/rules/`, memory-bank) or simple key-value notes. Without structured temporal relationships, it remains hard to answer questions like:
 
 - "What decisions led to this architecture?"
 - "Last time we tried an embedded graph DB, what happened?"
@@ -132,14 +133,14 @@ A knowledge graph can. Entities have relationships, facts have timestamps, and l
 - **Persistent memory** across sessions via a knowledge graph
 - **Two deployment modes** — local (FalkorDB Lite embedded) and centralized (FalkorDB server on NAS/cloud)
 - **Code-aware ontology** — decisions, patterns, components, tools, and a novel `Lesson` entity for anti-patterns, dead ends, and gotchas
-- **Proactive warning surfacing** — the plugin will warn you before you go down a known bad path (planned feature - not yet active)
+- **Proactive warning surfacing** — opt-in runtime warnings before known bad paths (`MEMORY_GRAPH_PROACTIVE=1`)
 - **Hybrid search** — graph traversal + vector similarity + temporal decay
 - **OpenCode plugin API** — hooks into session lifecycle, context compaction, and tool registration
 
 ## What makes this different
 
 1. **Structured anti-pattern tracking** — first-class `Lesson` entities with severity, trigger context, and resolution. No other tool does this.
-2. **Proactive surfacing** — trigger embeddings will match against current intent to surface relevant warnings (planned feature - code exists but not wired to runtime hooks).
+2. **Proactive surfacing** — trigger embeddings match current intent to surface relevant warnings at runtime when proactive mode is enabled.
 3. **Temporal fact management** — edges expire, decisions get superseded, the graph captures why.
 4. **Memory validation** — confidence levels and validation timestamps prevent stale memories from misleading the assistant.
 5. **Scope-aware tiers** — global preferences vs. project decisions vs. session tasks, loaded with different priority.
