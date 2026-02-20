@@ -70,7 +70,7 @@ Switching modes requires only a config change. The graph schema and all queries 
 The plugin uses OpenCode's plugin API to hook into lifecycle events and register tools.
 
 > [!IMPORTANT]
-> **Current MVP runtime hooks differ from the target architecture table below.** Active hooks today are `experimental.chat.system.transform`, `chat.message`, `experimental.session.compacting`, and `tool.execute.after` (placeholder TODO). Message extraction currently writes synchronously per message; there is no background queue flush flow yet.
+> **Current MVP runtime hooks differ from the target architecture table below.** Active hooks today are `experimental.chat.system.transform`, `chat.message`, `experimental.session.compacting`, and `tool.execute.after` (placeholder TODO). Message extraction currently writes synchronously per message. Pre-compaction snapshot persistence is implemented with idempotent dedupe, but there is still no background extraction queue.
 
 ### Hooks
 

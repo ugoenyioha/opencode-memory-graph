@@ -142,6 +142,11 @@ Note: remote mode is supported but still requires production soak validation.
 - Default scope is `project`.
 - Global writes are blocked unless explicitly trusted.
 
+### Verify pre-compaction snapshot behavior
+
+- During compaction, plugin attempts an idempotent pre-compaction snapshot write.
+- Repeated compaction on the same session/message boundary should not duplicate snapshot entities.
+
 ## Security defaults and boundaries
 
 - Default posture is conservative:

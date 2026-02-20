@@ -4,6 +4,7 @@ import { runtime } from "./config";
 import { merge } from "./extraction";
 import { connect } from "./graph/client";
 import { schema } from "./graph/schema";
+import { precompact } from "./plugin/compaction";
 import { core, format } from "./plugin/tiers";
 import { search } from "./search/hybrid";
 import { neutralize, redact, sanitize } from "./security/redact";
@@ -175,9 +176,15 @@ export const MemoryPlugin: Plugin = async (ctx) => {
 
     // No pending queue exists (writes are synchronous per message).
     // Compaction hook only annotates state; it does not imply background flush.
-    "experimental.session.compacting": async (_input, output) => {
+    "experimental.session.compacting": async (input, output) => {
+      const ok = await precompact(ctx.client, db, {
+        sessionID: input.sessionID,
+        directory: projectID,
+        packs: cfg.packs,
+      });
+      if (!ok) return;
       output.context.push(
-        "Note: memory compaction hook is active. No synthetic save confirmation is emitted.",
+        "Note: pre-compaction memory snapshot was persisted with idempotent dedupe.",
       );
     },
 
