@@ -269,6 +269,18 @@ The core insight: Decisions, Lessons, Preferences, Tasks, and Concepts are unive
 
 Packs are additive. Activating `["coding", "ops"]` gives you all labels from both. There are no conflicts because labels are just strings in the `label_type` field.
 
+### Current implementation notes
+
+- Config accepts mixed pack entries: built-in names (`"coding"`, `"general"`, `"ops"`) and inline custom pack objects.
+- Unknown built-in names fail fast (`unknown pack: ...`) instead of being ignored.
+- Custom packs cannot use reserved built-in pack names.
+- Label collisions across selected packs fail fast (`label collision: ...`).
+- Extraction validates `label_type` against the active pack set at parse time.
+
+### Migration note
+
+Pack validation is stricter than earlier drafts. Configurations that previously tolerated unknown pack names or duplicate labels now fail startup. This is intentional hardening; callers should treat config validation errors as deployment-time failures, not runtime warnings.
+
 ---
 
 ## Future considerations

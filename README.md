@@ -4,7 +4,24 @@ A knowledge-graph-powered memory plugin for [OpenCode](https://github.com/anomal
 
 ## Status
 
-**Design phase.** No code yet — the documents in `docs/` capture the full architecture, ontology, and research that informed the design.
+**Implementation in progress (MVP foundation complete).**
+
+Implemented and tested:
+
+- Local FalkorDB-backed graph client, schema bootstrap, deterministic IDs
+- Idempotent mutation reservation/commit flow with mutation journaling metadata
+- Extraction merge pipeline with schema validation, redaction, quarantine guards
+- Scope/project isolation controls for search/get/update/delete paths
+- Search MVP (vector + FTS fallback + recency decay + deterministic ordering)
+- Pluggable ontology packs (built-in + inline custom packs) with collision validation
+- Security hardening for prompt neutralization and protected lesson tamper blocking
+
+Validation:
+
+- `bun run typecheck`
+- `bun test` (integration tests run against local embedded FalkorDB)
+
+Post-MVP backlog remains active for remote-mode hardening, advanced ranking, proactive rollout tuning, and tier automation.
 
 ## Why this exists
 
