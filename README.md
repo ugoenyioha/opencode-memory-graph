@@ -1,33 +1,51 @@
 # opencode-memory-graph
 
-A knowledge-graph-powered memory plugin for [OpenCode](https://github.com/anomalyco/opencode). Gives your coding assistant persistent, structured memory across sessions using a temporal knowledge graph backed by [FalkorDB](https://www.falkordb.com/).
+A memory plugin for [OpenCode](https://github.com/anomalyco/opencode) that helps your coding assistant remember useful project context across sessions.
 
-## Status
+It stores memory in a knowledge graph backed by [FalkorDB](https://www.falkordb.com/), so the assistant can recall decisions, relationships, and lessons learned instead of starting cold every time.
 
-**Implementation in progress (MVP foundation complete).**
+## Why this is useful
 
-Implemented and tested:
+Most teams still experience memory loss in day-to-day AI coding workflows:
 
-- Local FalkorDB-backed graph client, schema bootstrap, deterministic IDs
-- Idempotent mutation reservation/commit flow with mutation journaling metadata
-- Extraction merge pipeline with schema validation, redaction, quarantine guards
-- Scope/project isolation controls for search/get/update/delete paths
-- Search MVP (vector + FTS fallback + recency decay + deterministic ordering)
-- Pluggable ontology packs (built-in + inline custom packs) with collision validation
-- Security hardening for prompt neutralization and protected lesson tamper blocking
+- yesterday's architectural decisions disappear
+- repeated mistakes come back because prior lessons are not surfaced
+- context gets split across chats, docs, and scratch notes
 
-Validation:
+This plugin makes memory durable and queryable, so you can ask things like:
+
+- "Why did we choose this approach?"
+- "What failed last time and what was the fix?"
+- "What should I avoid before touching this area?"
+
+## Why FalkorDB local + remote matters
+
+- **Local FalkorDB (embedded):** quick start, no external dependency, offline-friendly, data stays on your machine.
+- **Remote FalkorDB (server):** shared/team memory across machines, centralized access control, easier backup/operations.
+- **Same model in both modes:** same engine and Cypher patterns, so moving from local development to centralized deployment is low-friction.
+
+## Current status
+
+**MVP foundation is complete and test-validated.**
+
+What works now:
+
+- persistent memory writes with deterministic IDs and idempotent mutation handling
+- memory retrieval via `memory_search` and `memory_get`
+- hybrid ranking (graph traversal + vector/FTS fallback + temporal scoring + deterministic ordering)
+- proactive warning surfacing (opt-in with `MEMORY_GRAPH_PROACTIVE=1`)
+- scope isolation (project/global controls) and guarded global writes
+- protected-lesson quarantine and supersede lifecycle handling
+- working-tier and pre-compaction memory hooks
+
+Validation run in this repo:
 
 - `bun run typecheck`
-- `bun test` (integration tests run against local embedded FalkorDB)
+- `bun test`
+- remote harness validation in `src/graph/remote.test.ts`
+- interface dry run in `scripts/e2e-interfaces-dry-run.ts`
 
-Post-MVP backlog remains active for remote-mode hardening, advanced ranking, proactive rollout tuning, and tier automation.
-
-## Usage (MVP)
-
-This section documents current behavior in code and tests (local-first).
-
-### Quickstart
+## Quickstart
 
 1. Install and build:
 
@@ -36,7 +54,7 @@ bun install
 bun run build
 ```
 
-2. Load the plugin from npm in your OpenCode config:
+2. Load plugin in your OpenCode config:
 
 ```json title="opencode.json"
 {
@@ -45,127 +63,41 @@ bun run build
 }
 ```
 
-3. Set runtime env vars (local mode):
+3. Set local runtime env vars:
 
 ```bash
 export MEMORY_GRAPH_PATH="$HOME/.opencode/memory"
-export MEMORY_EMBEDDINGS="off" # use "local" to enable local embeddings
+export MEMORY_EMBEDDINGS="off" # off | local | cloud
 ```
 
-4. Start OpenCode and use the tools:
-   - `memory_search` for ranked summaries
-   - `memory_get` for full entity details + 1-hop relationships
+4. Start OpenCode and use:
 
-### Configuration examples
+- `memory_search` to find relevant memories
+- `memory_get` to inspect one entity and its nearby links
 
-```ts
-// Local (supported and tested)
-{
-  storage: { mode: "local", path: "~/.opencode/memory" },
-  embeddings: "off", // or "local"
-  default_scope: "project"
-}
-```
+## Security and safety defaults
 
-```ts
-// Remote (runtime-supported, production-hardening in progress)
-{
-  storage: {
-    mode: "remote",
-    host: "falkordb.example.internal",
-    port: 6379,
-    password: "...",
-    tls: true
-  },
-  embeddings: "off",
-  default_scope: "project"
-}
-```
+- defaults: local storage, embeddings off, project scope, proactive disabled
+- redaction and prompt neutralization on memory text paths
+- global writes require explicit trust (`trusted_global=true`)
+- protected Lesson entities are guarded by quarantine rules
 
-### Local vs remote status
+## Known limitations
 
-| Area                                   | Local                  | Remote                                             |
-| -------------------------------------- | ---------------------- | -------------------------------------------------- |
-| Config schema validation               | Implemented            | Implemented (`tls: true`, non-local host required) |
-| Plugin startup wiring (`src/index.ts`) | Implemented            | Implemented via env-driven runtime config          |
-| Graph client connect path              | Implemented and tested | Implemented (socket `tls` is passed through)       |
-| Integration test coverage              | Covered (`bun test`)   | Not end-to-end covered                             |
-
-### Security defaults (current)
-
-- Defaults are local storage, embeddings off, project scope, proactive disabled.
-- Memory text is redacted/neutralized before storage and tool output rendering.
-- Global writes require explicit trust (`trusted_global=true`).
-
-### Known limitations
-
-- Local mode is the only fully exercised workflow today.
-- Remote mode is runtime-supported but still needs production soak/E2E validation in a real remote deployment.
-- Proactive warning surfacing is runtime-active when `MEMORY_GRAPH_PROACTIVE=1`.
-- Working-tier loading is active in `experimental.chat.system.transform` with a capped budget.
-- Tool usage tracking hook exists as a TODO placeholder.
-
-### Troubleshooting (exact signals)
-
-- `global writes require trusted_global=true`
-  - Cause: global-scope write attempted without trust flag.
-- `unknown label_type: ...`
-  - Cause: extraction label is not part of active ontology labels.
-- `label collision: ...`
-  - Cause: conflicting label across selected packs/custom pack.
-- `[memory] Failed to load embedding model, falling back to FTS-only`
-  - Cause: local embedding model could not be loaded; search continues in FTS-only mode.
-
-For deeper operator guidance, see `docs/usage.md`.
-
-## Why this exists
-
-Many AI coding assistants still lose context between sessions. There is now a broad ecosystem of memory systems (for example Mem0, Zep/Graphiti, Letta/MemGPT, LangGraph memory stores, Redis-backed long-term memory layers), but in day-to-day developer workflows this often still falls back to flat markdown files (CLAUDE.md, `.cursor/rules/`, memory-bank) or simple key-value notes. Without structured temporal relationships, it remains hard to answer questions like:
-
-- "What decisions led to this architecture?"
-- "Last time we tried an embedded graph DB, what happened?"
-- "What gotchas should I know about before using this library?"
-
-A knowledge graph can. Entities have relationships, facts have timestamps, and lessons learned are first-class citizens — not buried in a text file nobody reads.
-
-## Goals
-
-- **Persistent memory** across sessions via a knowledge graph
-- **Two deployment modes** — local (FalkorDB Lite embedded) and centralized (FalkorDB server on NAS/cloud)
-- **Code-aware ontology** — decisions, patterns, components, tools, and a novel `Lesson` entity for anti-patterns, dead ends, and gotchas
-- **Proactive warning surfacing** — opt-in runtime warnings before known bad paths (`MEMORY_GRAPH_PROACTIVE=1`)
-- **Hybrid search** — graph traversal + vector similarity + temporal decay
-- **OpenCode plugin API** — hooks into session lifecycle, context compaction, and tool registration
-
-## What makes this different
-
-1. **Structured anti-pattern tracking** — first-class `Lesson` entities with severity, trigger context, and resolution. No other tool does this.
-2. **Proactive surfacing** — trigger embeddings match current intent to surface relevant warnings at runtime when proactive mode is enabled.
-3. **Temporal fact management** — edges expire, decisions get superseded, the graph captures why.
-4. **Memory validation** — confidence levels and validation timestamps prevent stale memories from misleading the assistant.
-5. **Scope-aware tiers** — global preferences vs. project decisions vs. session tasks, loaded with different priority.
-6. **Unified backend** — FalkorDB for both local and remote. Same Cypher queries, same client library, just different connection config.
+- local mode is the most exercised path
+- remote mode is functional and documented, but still depends on your deployment quality
+- `tool.execute.after` tracking is still a TODO placeholder
 
 ## Documentation
 
-| Document                                      | What it covers                                                                   |
-| --------------------------------------------- | -------------------------------------------------------------------------------- |
-| [Usage](docs/usage.md)                        | Quickstart, config, local vs remote status, security defaults, troubleshooting   |
-| [Orbstack E2E](docs/e2e-opencode-orbstack.md) | Repeatable end-to-end workflow from DB bring-up to teardown                      |
-| [Plan Conformance](docs/plan-conformance.md)  | Phase/deferred audit of implementation vs plan, including acknowledged changes   |
-| [Design](docs/design.md)                      | Architecture, storage backend, plugin integration, search pipeline, memory tiers |
-| [Ontology](docs/ontology.md)                  | Entity labels, relationship types, edge properties, the Lesson entity            |
-| [Research](docs/research.md)                  | Comparative analysis of 15+ tools, technology decisions, key findings            |
-
-## Technology choices
-
-| Component         | Choice                             | Why                                                         |
-| ----------------- | ---------------------------------- | ----------------------------------------------------------- |
-| Graph DB (local)  | FalkorDB Lite                      | Embedded npm package, zero-config, Cypher, TypeScript-first |
-| Graph DB (remote) | FalkorDB server                    | Same engine, same client library, same queries              |
-| Query language    | Cypher                             | Shared across both modes, well-supported, readable          |
-| Plugin host       | OpenCode plugin API                | Native TypeScript, hooks + tools, npm auto-install          |
-| Search            | Hybrid (graph + vector + temporal) | Best ideas from OpenClaw and Graphiti                       |
+| Document                                      | What it covers                                                          |
+| --------------------------------------------- | ----------------------------------------------------------------------- |
+| [Usage](docs/usage.md)                        | Setup, config, local/remote behavior, troubleshooting                   |
+| [Orbstack E2E](docs/e2e-opencode-orbstack.md) | Repeatable bring-up, verification, and teardown workflow                |
+| [Plan Conformance](docs/plan-conformance.md)  | Roadmap-phase and deferred-item audit against implementation            |
+| [Design](docs/design.md)                      | Architecture, lifecycle hooks, retrieval pipeline, tier model           |
+| [Ontology](docs/ontology.md)                  | Entity/relationship schema and label packs                              |
+| [Research](docs/research.md)                  | Comparative analysis of existing memory approaches and design rationale |
 
 ## License
 
