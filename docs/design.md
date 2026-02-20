@@ -18,6 +18,9 @@ The plugin hooks into the host's session lifecycle to automatically extract and 
 
 FalkorDB is the sole storage engine for both modes. This eliminates impedance mismatch — same Cypher queries, same client library (`falkordb` npm package), same graph schema.
 
+> [!IMPORTANT]
+> **Current MVP implementation status:** plugin startup currently initializes storage with `mode: "local"` from env/default path (`MEMORY_GRAPH_PATH`), so remote mode is not fully wired through runtime initialization yet. Treat remote as partial until bootstrap wiring is completed and end-to-end tested.
+
 ### Local mode
 
 Uses `falkordblite` (npm package). Starts an embedded Redis server with the FalkorDB module. Launches with the plugin, persists to disk, shuts down when the plugin stops.
@@ -45,6 +48,9 @@ const db = await FalkorDB.connect({
 });
 ```
 
+> [!NOTE]
+> Remote config schema currently enforces `tls: true` and a non-loopback host. In the current client implementation, the config type accepts `tls` but TLS options are not yet passed into `FalkorDB.connect`.
+
 ### Configuration
 
 ```ts
@@ -62,6 +68,9 @@ Switching modes requires only a config change. The graph schema and all queries 
 ## Plugin integration
 
 The plugin uses OpenCode's plugin API to hook into lifecycle events and register tools.
+
+> [!IMPORTANT]
+> **Current MVP runtime hooks differ from the target architecture table below.** Active hooks today are `experimental.chat.system.transform`, `chat.message`, `experimental.session.compacting`, and `tool.execute.after` (placeholder TODO). Message extraction currently writes synchronously per message; there is no background queue flush flow yet.
 
 ### Hooks
 
@@ -120,6 +129,8 @@ In addition to reactive search, the plugin proactively surfaces `Lesson` entitie
 
 This is how the plugin prevents the user from going down a known bad path without being asked.
 
+**Current status:** Proactive checker code exists in `src/plugin/proactive.ts` but is not wired to `message.create` hooks in `src/index.ts`.
+
 ---
 
 ## Memory tiers
@@ -143,7 +154,7 @@ Budget: ~2000 tokens. Kept lean to avoid eating context window.
 
 ### Working tier
 
-**Session-active** context. Loaded at session start from last session's state, updated throughout the current session.
+**Session-active** context (planned). Currently only core-tier loads at session start — working-tier code exists but is not used by the active runtime path.
 
 Contents:
 
