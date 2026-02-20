@@ -8,6 +8,10 @@ let loading: Promise<void> | null = null;
 
 const MODEL = "Xenova/all-MiniLM-L6-v2";
 
+function enabled() {
+  return process.env.MEMORY_EMBEDDINGS === "local";
+}
+
 async function init() {
   try {
     const { pipeline: createPipeline } = await import(
@@ -32,6 +36,7 @@ async function init() {
 }
 
 export async function embed(text: string): Promise<number[] | null> {
+  if (!enabled()) return null;
   if (!loading) loading = init();
   await loading;
   if (!pipeline) return null;
@@ -45,3 +50,10 @@ export async function embedBatch(
 }
 
 export const DIMENSION = 384;
+
+export function status() {
+  if (!enabled()) return "disabled" as const;
+  if (!loading) return "not_loaded" as const;
+  if (!pipeline) return "failed" as const;
+  return "ready" as const;
+}

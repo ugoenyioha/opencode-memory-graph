@@ -6,6 +6,7 @@
 
 import type { GraphClient } from "../graph/client";
 import { embed } from "../embedding";
+import { neutralize } from "../security/redact";
 
 export type Warning = {
   uuid: string;
@@ -27,21 +28,22 @@ export async function check(
   const vec = await embed(message);
   if (!vec) return [];
 
-  const vecStr = `[${vec.join(",")}]`;
   const result = (await db.roQuery(
-    `CALL db.idx.vector.queryNodes('Entity', 'trigger_embedding', 5, vecf32(${vecStr}))
+    `CALL db.idx.vector.queryNodes('Entity', 'trigger_embedding', 5, vecf32($vec))
      YIELD node, score
-     WHERE node.label_type = 'Lesson'
-     RETURN node.uuid, node.name, node.summary, node.attributes, score
+     WHERE node.label_type = 'Lesson' AND node.expired_at IS NULL
+     RETURN node.uuid AS uuid, node.name AS name, node.summary AS summary,
+            node.attributes AS attributes, score AS score
      ORDER BY score DESC`,
-  )) as { data: unknown[][] };
+    { vec },
+  )) as { data: Record<string, unknown>[] };
 
   const warnings: Warning[] = [];
   for (const row of result.data ?? []) {
-    const score = row[4] as number;
+    const score = row.score as number;
     let attrs: Record<string, string> = {};
     try {
-      attrs = JSON.parse(row[3] as string);
+      attrs = JSON.parse(row.attributes as string);
     } catch {}
 
     const severity = attrs.severity ?? "warning";
@@ -50,9 +52,9 @@ export async function check(
 
     if (score >= threshold) {
       warnings.push({
-        uuid: row[0] as string,
-        name: row[1] as string,
-        summary: row[2] as string,
+        uuid: row.uuid as string,
+        name: row.name as string,
+        summary: row.summary as string,
         severity,
         resolution: attrs.resolution,
       });
@@ -66,8 +68,10 @@ export function format(warnings: Warning[]): string {
   if (warnings.length === 0) return "";
   const lines = warnings.map((w) => {
     const icon = w.severity === "blocker" ? "🚫" : "⚠️";
-    const res = w.resolution ? ` Recommendation: ${w.resolution}` : "";
-    return `${icon} **${w.name}**: ${w.summary}${res}`;
+    const res = w.resolution
+      ? ` Recommendation: ${JSON.stringify(neutralize(String(w.resolution)))}`
+      : "";
+    return `${icon} ${JSON.stringify(neutralize(String(w.name)))}: ${JSON.stringify(neutralize(String(w.summary)))}${res}`;
   });
   return `\n---\n**Memory warnings:**\n${lines.join("\n")}\n---`;
 }

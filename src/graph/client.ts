@@ -7,10 +7,19 @@
 const GRAPH_NAME = "memory";
 
 export type GraphClient = {
-  query: (cypher: string, params?: Record<string, unknown>) => Promise<unknown>;
+  query: (
+    cypher: string,
+    params?: Record<
+      string,
+      string | number | boolean | null | string[] | number[]
+    >,
+  ) => Promise<unknown>;
   roQuery: (
     cypher: string,
-    params?: Record<string, unknown>,
+    params?: Record<
+      string,
+      string | number | boolean | null | string[] | number[]
+    >,
   ) => Promise<unknown>;
   close: () => Promise<void>;
 };
@@ -23,6 +32,7 @@ export type Config = {
   host?: string;
   port?: number;
   password?: string;
+  tls?: boolean;
 };
 
 const defaults: Config = {

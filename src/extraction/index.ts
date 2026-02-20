@@ -5,9 +5,16 @@
 
 import type { GraphClient } from "../graph/client";
 import { embed } from "../embedding";
+import { journal, retry, serial } from "../graph/commit";
+import { entity as entityId, relation as relationId } from "../graph/ids";
+import { complete, reserve } from "../graph/mutation";
+import { registry } from "../ontology/registry";
+import { redact } from "../security/redact";
+import { extractionWithPacks } from "./schema";
+import { type Pack } from "../ontology/packs";
 
 export type ExtractedEntity = {
-  action: "create" | "update";
+  action: "create" | "update" | "delete";
   uuid?: string;
   name?: string;
   label_type?: string;
@@ -30,131 +37,384 @@ export type ExtractionResult = {
   relationships: ExtractedRelationship[];
 };
 
-// Debounce state
-let pending: string[] = [];
-let timer: ReturnType<typeof setTimeout> | null = null;
-const DEBOUNCE_MS = 2000;
-
-export function queue(message: string) {
-  pending.push(message);
-  if (timer) clearTimeout(timer);
-  timer = setTimeout(flush, DEBOUNCE_MS);
-}
-
-async function flush() {
-  const batch = pending.splice(0);
-  if (batch.length === 0) return;
-  // TODO: call LLM with extraction prompt, parse response, merge into graph
-}
-
 export async function merge(
   db: GraphClient,
   result: ExtractionResult,
+  options?: {
+    mutation_key?: string;
+    scope?: "global" | "project" | "session";
+    project_id?: string;
+    trusted_global?: boolean;
+    packs?: Array<string | Pack>;
+  },
 ): Promise<void> {
-  for (const entity of result.entities) {
-    if (entity.action === "create" && entity.name && entity.label_type) {
-      const uuid = `ent_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
-      const vec = await embed(entity.name);
-      const triggerVec =
-        entity.label_type === "Lesson" && entity.attributes?.trigger
-          ? await embed(entity.attributes.trigger as string)
-          : null;
+  const safe = extractionWithPacks(result, options?.packs ?? ["coding"]);
+  const allowed = registry(options?.packs ?? ["coding"]);
+  const scope = options?.scope ?? "project";
+  const projectID = options?.project_id ?? "default";
+  const allowGlobal = options?.trusted_global === true;
+  if (scope === "global" && !options?.trusted_global) {
+    throw new Error("global writes require trusted_global=true");
+  }
+  const key = options?.mutation_key;
+  return serial(scope, async () => {
+    const mutationScope = `${scope}:${projectID}`;
+    if (key && !(await reserve(db, mutationScope, key))) return;
 
-      await db.query(
-        `CREATE (e:Entity {
-          uuid: $uuid,
-          name: $name,
-          summary: $summary,
-          name_embedding: vecf32($vec),
-          label_type: $label_type,
-          labels: $labels,
-          attributes: $attributes,
-          scope: $scope,
-          source: $source,
-          confidence: $confidence,
-          validated_at: $now,
-          ttl: null,
-          created_at: $now
-        })`,
+    const write = (
+      cypher: string,
+      params?: Record<
+        string,
+        string | number | boolean | null | string[] | number[]
+      >,
+    ) => retry(() => db.query(cypher, params));
+
+    const read = (
+      cypher: string,
+      params?: Record<
+        string,
+        string | number | boolean | null | string[] | number[]
+      >,
+    ) => retry(() => db.roQuery(cypher, params));
+
+    const names = new Map<string, string>();
+
+    for (const entity of safe.entities) {
+      if (entity.action === "create" && entity.name && entity.label_type) {
+        const seed =
+          scope === "global"
+            ? `global:${entity.label_type}`
+            : `${scope}:${projectID}:${entity.label_type}`;
+        const uuid = entityId(seed, entity.name);
+        names.set(entity.name, uuid);
+        const vec = await embed(entity.name);
+        const trigger =
+          entity.label_type === "Lesson" && entity.attributes?.trigger
+            ? String(entity.attributes.trigger)
+            : null;
+        const triggerVec =
+          entity.label_type === "Lesson" && entity.attributes?.trigger
+            ? await embed(trigger ?? "")
+            : null;
+
+        await write(
+          `MERGE (e:Entity {uuid: $uuid})
+         ON CREATE SET
+          e.name = $name,
+          e.summary = $summary,
+          e.label_type = $label_type,
+          e.labels = $labels,
+          e.attributes = $attributes,
+          e.scope = $scope,
+          e.project_id = $project_id,
+          e.source = $source,
+          e.confidence = $confidence,
+          e.validated_at = $now,
+          e.ttl = null,
+          e.created_at = $now
+         ON MATCH SET
+          e.summary = $summary,
+          e.attributes = $attributes,
+          e.confidence = $confidence,
+          e.validated_at = $now`,
+          {
+            uuid,
+            name: entity.name,
+            summary: redact(entity.summary ?? ""),
+            label_type: entity.label_type,
+            labels: ["Entity", entity.label_type],
+            attributes: JSON.stringify(
+              Object.fromEntries(
+                Object.entries(entity.attributes ?? {}).map(([k, v]) => [
+                  k,
+                  typeof v === "string" ? redact(v) : v,
+                ]),
+              ),
+            ),
+            scope,
+            project_id: projectID,
+            source: "auto",
+            confidence: "suspected",
+            now: Date.now(),
+          },
+        );
+
+        if (vec) {
+          await write(
+            `MATCH (e:Entity {uuid: $uuid})
+           SET e.name_embedding = vecf32($vec)`,
+            { uuid, vec },
+          );
+        }
+
+        // Set trigger_embedding separately for Lesson entities
+        if (triggerVec) {
+          await write(
+            `MATCH (e:Entity {uuid: $uuid})
+           SET e.trigger_embedding = vecf32($vec)`,
+            { uuid, vec: triggerVec },
+          );
+        }
+      }
+
+      if (entity.action === "update" && entity.uuid) {
+        const row = (await read(
+          `MATCH (e:Entity {uuid: $uuid})
+           WHERE (e.project_id = $project_id) OR ($allow_global AND e.scope = 'global')
+           RETURN e.label_type AS label_type, e.attributes AS attributes`,
+          {
+            uuid: entity.uuid,
+            project_id: projectID,
+            allow_global: allowGlobal,
+          },
+        )) as { data: Record<string, unknown>[] };
+        if ((row.data ?? []).length === 0) continue;
+        const label = row.data[0]?.label_type as string | undefined;
+        if (label && !allowed.has(label)) continue;
+        let severity = "";
+        try {
+          const raw = row.data[0]?.attributes as string | undefined;
+          severity = raw ? String(JSON.parse(raw).severity ?? "") : "";
+        } catch {
+          if (label === "Lesson") {
+            await write(
+              `MERGE (q:Quarantine {uuid: $id})
+               ON CREATE SET q.entity_uuid = $uuid, q.reason = 'malformed_lesson_attributes', q.created_at = $now`,
+              { id: `q_${entity.uuid}`, uuid: entity.uuid, now: Date.now() },
+            );
+            continue;
+          }
+        }
+
+        const sets: string[] = [];
+        const params: Record<
+          string,
+          string | number | boolean | null | string[] | number[]
+        > = { uuid: entity.uuid };
+
+        if (entity.summary) {
+          sets.push("e.summary = $summary");
+          params.summary = redact(entity.summary);
+        }
+        if (entity.confidence) {
+          sets.push("e.confidence = $confidence");
+          params.confidence = entity.confidence;
+        }
+        if (entity.attributes) {
+          const next = Object.fromEntries(
+            Object.entries(entity.attributes).map(([k, v]) => [
+              k,
+              typeof v === "string" ? redact(v) : v,
+            ]),
+          );
+          if (
+            label === "Lesson" &&
+            (severity === "blocker" || severity === "warning")
+          ) {
+            const nextSeverity = next.severity;
+            if (
+              typeof nextSeverity !== "string" ||
+              (nextSeverity !== "blocker" && nextSeverity !== "warning")
+            ) {
+              await write(
+                `MERGE (q:Quarantine {uuid: $id})
+                 ON CREATE SET q.entity_uuid = $uuid, q.reason = 'protected_lesson_tamper', q.created_at = $now`,
+                { id: `q_${entity.uuid}`, uuid: entity.uuid, now: Date.now() },
+              );
+              continue;
+            }
+          }
+
+          if (
+            label === "Lesson" &&
+            (severity === "blocker" || severity === "warning") &&
+            typeof next.severity === "string" &&
+            next.severity !== "blocker" &&
+            next.severity !== "warning"
+          ) {
+            await write(
+              `MERGE (q:Quarantine {uuid: $id})
+               ON CREATE SET q.entity_uuid = $uuid, q.reason = 'protected_lesson_tamper', q.created_at = $now`,
+              { id: `q_${entity.uuid}`, uuid: entity.uuid, now: Date.now() },
+            );
+            continue;
+          }
+          sets.push("e.attributes = $attributes");
+          params.attributes = JSON.stringify(next);
+        }
+
+        if (
+          label === "Lesson" &&
+          (severity === "blocker" || severity === "warning") &&
+          sets.length > 0
+        ) {
+          await write(
+            `MERGE (q:Quarantine {uuid: $id})
+             ON CREATE SET q.entity_uuid = $uuid, q.reason = 'protected_lesson_tamper', q.created_at = $now`,
+            { id: `q_${entity.uuid}`, uuid: entity.uuid, now: Date.now() },
+          );
+          continue;
+        }
+
+        if (sets.length > 0) {
+          await write(
+            `MATCH (e:Entity {uuid: $uuid})
+             WHERE (e.project_id = $project_id) OR ($allow_global AND e.scope = 'global')
+             SET ${sets.join(", ")}`,
+            { ...params, project_id: projectID, allow_global: allowGlobal },
+          );
+        }
+      }
+
+      if (entity.action === "delete" && entity.uuid) {
+        const row = (await read(
+          `MATCH (e:Entity {uuid: $uuid})
+         WHERE (e.project_id = $project_id) OR ($allow_global AND e.scope = 'global')
+         RETURN e.label_type AS label_type, e.attributes AS attributes`,
+          {
+            uuid: entity.uuid,
+            project_id: projectID,
+            allow_global: allowGlobal,
+          },
+        )) as { data: Record<string, unknown>[] };
+        if ((row.data ?? []).length === 0) continue;
+
+        const label = row.data[0]?.label_type as string | undefined;
+        if (label && !allowed.has(label)) continue;
+        let severity = "";
+        try {
+          const raw = row.data[0]?.attributes as string | undefined;
+          severity = raw ? String(JSON.parse(raw).severity ?? "") : "";
+        } catch {
+          if (label === "Lesson") {
+            await write(
+              `MERGE (q:Quarantine {uuid: $id})
+               ON CREATE SET q.entity_uuid = $uuid, q.reason = 'malformed_lesson_attributes', q.created_at = $now`,
+              { id: `q_${entity.uuid}`, uuid: entity.uuid, now: Date.now() },
+            );
+            continue;
+          }
+        }
+
+        if (
+          label === "Lesson" &&
+          (severity === "blocker" || severity === "warning")
+        ) {
+          await write(
+            `MERGE (q:Quarantine {uuid: $id})
+           ON CREATE SET q.entity_uuid = $uuid, q.reason = 'protected_lesson', q.created_at = $now`,
+            {
+              id: `q_${entity.uuid}`,
+              uuid: entity.uuid,
+              now: Date.now(),
+            },
+          );
+          continue;
+        }
+
+        await write(
+          `MATCH (e:Entity {uuid: $uuid})
+         SET e.expired_at = $now
+         WITH e
+         OPTIONAL MATCH (e)-[r:RELATES_TO]-()
+         SET r.expired_at = $now`,
+          { uuid: entity.uuid, now: Date.now() },
+        );
+      }
+    }
+
+    // Merge relationships
+    for (const rel of safe.relationships) {
+      const sourceUuid =
+        names.get(rel.source_name) ??
+        ((
+          (await read(
+            `MATCH (e:Entity {name: $name})
+            WHERE e.expired_at IS NULL
+              AND (e.project_id = $project_id OR ($allow_global AND e.scope = 'global'))
+            RETURN e.uuid
+            ORDER BY e.created_at DESC, e.uuid ASC
+            LIMIT 1`,
+            {
+              name: rel.source_name,
+              project_id: projectID,
+              allow_global: allowGlobal,
+            },
+          )) as { data: Record<string, unknown>[] }
+        ).data[0]?.["e.uuid"] as string | undefined);
+      const targetUuid =
+        names.get(rel.target_name) ??
+        ((
+          (await read(
+            `MATCH (e:Entity {name: $name})
+            WHERE e.expired_at IS NULL
+              AND (e.project_id = $project_id OR ($allow_global AND e.scope = 'global'))
+            RETURN e.uuid
+            ORDER BY e.created_at DESC, e.uuid ASC
+            LIMIT 1`,
+            {
+              name: rel.target_name,
+              project_id: projectID,
+              allow_global: allowGlobal,
+            },
+          )) as { data: Record<string, unknown>[] }
+        ).data[0]?.["e.uuid"] as string | undefined);
+      if (!sourceUuid || !targetUuid) continue;
+
+      const uuid = relationId(sourceUuid, rel.name, targetUuid);
+      const vec = await embed(rel.fact);
+
+      await write(
+        `MATCH (a:Entity {uuid: $source_uuid}), (b:Entity {uuid: $target_uuid})
+        WHERE (a.project_id = $project_id OR ($allow_global AND a.scope = 'global'))
+          AND (b.project_id = $project_id OR ($allow_global AND b.scope = 'global'))
+        MERGE (a)-[r:RELATES_TO {uuid: $uuid}]->(b)
+       ON CREATE SET
+         r.name = $rel_name,
+         r.fact = $fact,
+         r.valid_at = $now,
+         r.invalid_at = null,
+         r.expired_at = null,
+         r.episodes = [],
+         r.attributes = '{}',
+         r.created_at = $now
+       ON MATCH SET
+         r.fact = $fact,
+         r.invalid_at = null,
+         r.expired_at = null`,
         {
+          source_uuid: sourceUuid,
+          target_uuid: targetUuid,
+          project_id: projectID,
+          allow_global: allowGlobal,
           uuid,
-          name: entity.name,
-          summary: entity.summary ?? "",
-          vec: vec ? `[${vec.join(",")}]` : "[]",
-          label_type: entity.label_type,
-          labels: ["Entity", entity.label_type],
-          attributes: JSON.stringify(entity.attributes ?? {}),
-          scope: entity.scope ?? "project",
-          source: entity.source ?? "auto",
-          confidence: entity.confidence ?? "suspected",
+          rel_name: rel.name,
+          fact: redact(rel.fact),
           now: Date.now(),
         },
       );
 
-      // Set trigger_embedding separately for Lesson entities
-      if (triggerVec) {
-        await db.query(
-          `MATCH (e:Entity {uuid: $uuid})
-           SET e.trigger_embedding = vecf32($vec)`,
-          { uuid, vec: `[${triggerVec.join(",")}]` },
+      if (vec) {
+        await write(
+          `MATCH ()-[r:RELATES_TO {uuid: $uuid}]->()
+         SET r.fact_embedding = vecf32($vec)`,
+          { uuid, vec },
         );
       }
     }
 
-    if (entity.action === "update" && entity.uuid) {
-      const sets: string[] = [];
-      const params: Record<string, unknown> = { uuid: entity.uuid };
-
-      if (entity.summary) {
-        sets.push("e.summary = $summary");
-        params.summary = entity.summary;
-      }
-      if (entity.confidence) {
-        sets.push("e.confidence = $confidence");
-        params.confidence = entity.confidence;
-      }
-      if (entity.attributes) {
-        sets.push("e.attributes = $attributes");
-        params.attributes = JSON.stringify(entity.attributes);
-      }
-
-      if (sets.length > 0) {
-        await db.query(
-          `MATCH (e:Entity {uuid: $uuid}) SET ${sets.join(", ")}`,
-          params,
-        );
-      }
+    if (key) {
+      await journal(
+        db,
+        mutationScope,
+        key,
+        JSON.stringify({
+          entities: safe.entities.length,
+          relationships: safe.relationships.length,
+          created_at: Date.now(),
+        }),
+      );
+      await complete(db, mutationScope, key);
     }
-  }
-
-  // Merge relationships
-  for (const rel of result.relationships) {
-    const uuid = `rel_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
-    const vec = await embed(rel.fact);
-
-    await db.query(
-      `MATCH (a:Entity {name: $source_name}), (b:Entity {name: $target_name})
-       CREATE (a)-[:RELATES_TO {
-         uuid: $uuid,
-         name: $rel_name,
-         fact: $fact,
-         fact_embedding: vecf32($vec),
-         valid_at: $now,
-         invalid_at: null,
-         expired_at: null,
-         episodes: [],
-         attributes: '{}',
-         created_at: $now
-       }]->(b)`,
-      {
-        source_name: rel.source_name,
-        target_name: rel.target_name,
-        uuid,
-        rel_name: rel.name,
-        fact: rel.fact,
-        vec: vec ? `[${vec.join(",")}]` : "[]",
-        now: Date.now(),
-      },
-    );
-  }
+  });
 }

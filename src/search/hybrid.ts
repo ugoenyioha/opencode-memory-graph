@@ -16,13 +16,15 @@ export type SearchResult = {
   type: string;
   summary: string;
   score: number;
+  created_at?: number;
+  scope?: string;
 };
 
 export type SearchOptions = {
   query: string;
   scope?: "global" | "project" | "session";
   limit?: number;
-  projectScope?: string;
+  project_id?: string;
 };
 
 const HALF_LIFE_DAYS = 30;
@@ -33,61 +35,35 @@ function decay(createdAt: number, now: number): number {
   return Math.exp(-LAMBDA * Math.max(days, 0));
 }
 
-function mmr(
-  results: SearchResult[],
-  limit: number,
-  diversityWeight = 0.3,
-): SearchResult[] {
-  if (results.length <= limit) return results;
-  const selected: SearchResult[] = [results[0]!];
-  const remaining = results.slice(1);
-
-  while (selected.length < limit && remaining.length > 0) {
-    let best = 0;
-    let bestScore = -Infinity;
-    for (let i = 0; i < remaining.length; i++) {
-      const candidate = remaining[i]!;
-      const maxSim = Math.max(
-        ...selected.map((s) =>
-          s.name === candidate.name && s.type === candidate.type ? 1 : 0,
-        ),
-      );
-      const score =
-        (1 - diversityWeight) * candidate.score - diversityWeight * maxSim;
-      if (score > bestScore) {
-        bestScore = score;
-        best = i;
-      }
-    }
-    selected.push(remaining.splice(best, 1)[0]!);
-  }
-  return selected;
-}
-
 export async function search(
   db: GraphClient,
   options: SearchOptions,
 ): Promise<SearchResult[]> {
-  const limit = options.limit ?? 10;
+  const limit = Math.min(Math.max(options.limit ?? 10, 1), 50);
   const vec = await embed(options.query);
 
   // --- Vector similarity ---
   let vectorResults: SearchResult[] = [];
   if (vec) {
-    const vecStr = `[${vec.join(",")}]`;
     const result = (await db.roQuery(
-      `CALL db.idx.vector.queryNodes('Entity', 'name_embedding', $k, vecf32(${vecStr}))
+      `CALL db.idx.vector.queryNodes('Entity', 'name_embedding', $k, vecf32($vec))
        YIELD node, score
-       RETURN node.uuid, node.name, node.label_type, node.summary, node.created_at, node.scope, score`,
-      { k: limit * 2 },
-    )) as { data: unknown[][] };
+       WHERE node.expired_at IS NULL
+         AND (node.scope = 'global' OR node.project_id = $project_id)
+       RETURN node.uuid AS uuid, node.name AS name, node.label_type AS label_type,
+               node.summary AS summary, node.created_at AS created_at,
+               node.scope AS scope, score AS score`,
+      { k: limit * 3, vec, project_id: options.project_id ?? "default" },
+    )) as { data: Record<string, unknown>[] };
 
     vectorResults = (result.data ?? []).map((row) => ({
-      uuid: row[0] as string,
-      name: row[1] as string,
-      type: row[2] as string,
-      summary: row[3] as string,
-      score: row[6] as number,
+      uuid: row.uuid as string,
+      name: row.name as string,
+      type: row.label_type as string,
+      summary: row.summary as string,
+      created_at: row.created_at as number,
+      scope: row.scope as string,
+      score: row.score as number,
     }));
   }
 
@@ -96,38 +72,46 @@ export async function search(
     const result = (await db.roQuery(
       `CALL db.idx.fulltext.queryNodes('Entity', $query)
        YIELD node, score
-       RETURN node.uuid, node.name, node.label_type, node.summary, node.created_at, node.scope, score
+       WHERE node.expired_at IS NULL
+         AND (node.scope = 'global' OR node.project_id = $project_id)
+       RETURN node.uuid AS uuid, node.name AS name, node.label_type AS label_type,
+               node.summary AS summary, node.created_at AS created_at,
+               node.scope AS scope, score AS score
        LIMIT $limit`,
-      { query: options.query, limit: limit * 2 },
-    )) as { data: unknown[][] };
+      {
+        query: options.query,
+        limit: limit * 3,
+        project_id: options.project_id ?? "default",
+      },
+    )) as { data: Record<string, unknown>[] };
 
     vectorResults = (result.data ?? []).map((row) => ({
-      uuid: row[0] as string,
-      name: row[1] as string,
-      type: row[2] as string,
-      summary: row[3] as string,
-      score: row[6] as number,
+      uuid: row.uuid as string,
+      name: row.name as string,
+      type: row.label_type as string,
+      summary: row.summary as string,
+      created_at: row.created_at as number,
+      scope: row.scope as string,
+      score: row.score as number,
     }));
   }
 
   // --- Temporal decay ---
   const now = Date.now();
   for (const r of vectorResults) {
-    // TODO: pass created_at through from query results for real decay
-    r.score *= 0.5; // vector weight
+    if (r.scope === "global") continue;
+    if (!r.created_at) continue;
+    r.score *= decay(r.created_at, now);
   }
-
-  // --- Graph traversal boost (1-hop neighbors of top results) ---
-  // TODO: for top N results, traverse RELATES_TO edges and boost neighbors
 
   // --- Scope filtering ---
   if (options.scope) {
-    vectorResults = vectorResults.filter(
-      (r) => r.type === "Preference" || true, // TODO: filter by scope from result
-    );
+    vectorResults = vectorResults.filter((r) => r.scope === options.scope);
   }
 
-  // --- MMR diversity re-ranking ---
-  const ranked = vectorResults.sort((a, b) => b.score - a.score);
-  return mmr(ranked, limit);
+  const ranked = vectorResults.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return a.uuid.localeCompare(b.uuid);
+  });
+  return ranked.slice(0, limit);
 }

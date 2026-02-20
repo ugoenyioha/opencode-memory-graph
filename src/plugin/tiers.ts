@@ -5,6 +5,7 @@
 // Archival tier: on-demand via memory_search / memory_get tools
 
 import type { GraphClient } from "../graph/client";
+import { neutralize } from "../security/redact";
 
 export type TierEntity = {
   uuid: string;
@@ -16,44 +17,48 @@ export type TierEntity = {
 
 export async function core(
   db: GraphClient,
-  projectScope: string,
+  projectID: string,
 ): Promise<TierEntity[]> {
   const result = (await db.roQuery(
     `MATCH (e:Entity)
-     WHERE e.scope IN ['global', $scope]
+     WHERE (e.scope = 'global' OR (e.scope = 'project' AND e.project_id = $project_id))
+       AND e.expired_at IS NULL
        AND e.label_type IN ['Project', 'Pattern', 'Preference']
-     RETURN e.uuid, e.name, e.label_type, e.summary, e.attributes
+     RETURN e.uuid AS uuid, e.name AS name, e.label_type AS label_type,
+            e.summary AS summary, e.attributes AS attributes
      ORDER BY e.created_at DESC
      LIMIT 50`,
-    { scope: projectScope },
-  )) as { data: unknown[][] };
+    { project_id: projectID },
+  )) as { data: Record<string, unknown>[] };
 
   const entities = (result.data ?? []).map((row) => ({
-    uuid: row[0] as string,
-    name: row[1] as string,
-    type: row[2] as string,
-    summary: row[3] as string,
-    attributes: row[4] as string,
+    uuid: row.uuid as string,
+    name: row.name as string,
+    type: row.label_type as string,
+    summary: row.summary as string,
+    attributes: row.attributes as string,
   }));
 
   // Also load blocker-severity lessons
   const lessons = (await db.roQuery(
     `MATCH (e:Entity)
-     WHERE e.label_type = 'Lesson'
-       AND e.scope IN ['global', $scope]
-     RETURN e.uuid, e.name, e.label_type, e.summary, e.attributes
+      WHERE e.label_type = 'Lesson'
+       AND (e.scope = 'global' OR (e.scope = 'project' AND e.project_id = $project_id))
+       AND e.expired_at IS NULL
+     RETURN e.uuid AS uuid, e.name AS name, e.label_type AS label_type,
+            e.summary AS summary, e.attributes AS attributes
      ORDER BY e.created_at DESC
      LIMIT 10`,
-    { scope: projectScope },
-  )) as { data: unknown[][] };
+    { project_id: projectID },
+  )) as { data: Record<string, unknown>[] };
 
   const blockers = (lessons.data ?? [])
     .map((row) => ({
-      uuid: row[0] as string,
-      name: row[1] as string,
-      type: row[2] as string,
-      summary: row[3] as string,
-      attributes: row[4] as string,
+      uuid: row.uuid as string,
+      name: row.name as string,
+      type: row.label_type as string,
+      summary: row.summary as string,
+      attributes: row.attributes as string,
     }))
     .filter((e) => {
       try {
@@ -68,30 +73,37 @@ export async function core(
 
 export async function working(
   db: GraphClient,
+  projectID: string,
   recentCutoff: number,
 ): Promise<TierEntity[]> {
   const result = (await db.roQuery(
     `MATCH (e:Entity)
-     WHERE e.scope = 'session'
-       OR (e.label_type IN ['Task', 'Decision', 'Error']
-           AND e.created_at > $cutoff)
-     RETURN e.uuid, e.name, e.label_type, e.summary, e.attributes
+     WHERE e.expired_at IS NULL
+       AND ((e.scope = 'session' AND e.project_id = $project_id)
+            OR (e.label_type IN ['Task', 'Decision', 'Error']
+                AND (e.scope = 'global' OR e.project_id = $project_id)
+                AND e.created_at > $cutoff))
+     RETURN e.uuid AS uuid, e.name AS name, e.label_type AS label_type,
+            e.summary AS summary, e.attributes AS attributes
      ORDER BY e.created_at DESC
      LIMIT 30`,
-    { cutoff: recentCutoff },
-  )) as { data: unknown[][] };
+    { cutoff: recentCutoff, project_id: projectID },
+  )) as { data: Record<string, unknown>[] };
 
   return (result.data ?? []).map((row) => ({
-    uuid: row[0] as string,
-    name: row[1] as string,
-    type: row[2] as string,
-    summary: row[3] as string,
-    attributes: row[4] as string,
+    uuid: row.uuid as string,
+    name: row.name as string,
+    type: row.label_type as string,
+    summary: row.summary as string,
+    attributes: row.attributes as string,
   }));
 }
 
 export function format(entities: TierEntity[]): string {
   if (entities.length === 0) return "";
-  const lines = entities.map((e) => `- [${e.type}] ${e.name}: ${e.summary}`);
+  const lines = entities.map(
+    (e) =>
+      `- [${e.type}] ${JSON.stringify(neutralize(String(e.name)))}: ${JSON.stringify(neutralize(String(e.summary)))}`,
+  );
   return lines.join("\n");
 }

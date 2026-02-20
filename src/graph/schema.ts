@@ -17,6 +17,18 @@ const rangeIndexes = [
   `CREATE INDEX FOR (ep:Episode) ON (ep.uuid)`,
   `CREATE INDEX FOR (ep:Episode) ON (ep.session_id)`,
   `CREATE INDEX FOR (ep:Episode) ON (ep.created_at)`,
+  // Mutation
+  `CREATE INDEX FOR (m:Mutation) ON (m.uuid)`,
+  `CREATE INDEX FOR (m:Mutation) ON (m.scope)`,
+  `CREATE INDEX FOR (m:Mutation) ON (m.created_at)`,
+  // Journal
+  `CREATE INDEX FOR (j:Journal) ON (j.uuid)`,
+  `CREATE INDEX FOR (j:Journal) ON (j.scope)`,
+  `CREATE INDEX FOR (j:Journal) ON (j.created_at)`,
+  // Quarantine
+  `CREATE INDEX FOR (q:Quarantine) ON (q.uuid)`,
+  `CREATE INDEX FOR (q:Quarantine) ON (q.entity_uuid)`,
+  `CREATE INDEX FOR (q:Quarantine) ON (q.created_at)`,
   // Edges
   `CREATE INDEX FOR ()-[r:RELATES_TO]-() ON (r.uuid)`,
   `CREATE INDEX FOR ()-[r:RELATES_TO]-() ON (r.name)`,
@@ -39,11 +51,23 @@ const vectorIndexes = [
 ];
 
 async function run(db: GraphClient, queries: string[]) {
+  const ignorable = [
+    "already exists",
+    "already indexed",
+    "index already",
+    "constraint already",
+    "already configured",
+  ];
+
   for (const q of queries) {
     try {
       await db.query(q);
-    } catch {
-      // Index already exists — safe to ignore
+    } catch (error) {
+      const text = String(error).toLowerCase();
+      if (ignorable.some((entry) => text.includes(entry))) {
+        continue;
+      }
+      throw error;
     }
   }
 }

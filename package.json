@@ -37,5 +37,10 @@
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^5.7.0"
-  }
+  },
+  "trustedDependencies": [
+    "falkordblite",
+    "onnxruntime-node",
+    "protobufjs"
+  ]
 }
