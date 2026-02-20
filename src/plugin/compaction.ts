@@ -1,6 +1,10 @@
 import type { GraphClient } from "../graph/client";
 import { merge } from "../extraction";
 
+const MIN_MESSAGES = 3;
+const COOLDOWN_MS = 30_000;
+const seen = new Map<string, number>();
+
 type SessionMessage = {
   info: { id: string };
   parts: Array<{
@@ -28,6 +32,22 @@ export function summarize(messages: SessionMessage[]) {
 
   if (!text) return "";
   return text.slice(0, 2000);
+}
+
+export function shouldCompact(
+  sessionID: string,
+  count: number,
+  now = Date.now(),
+) {
+  if (count < MIN_MESSAGES) return false;
+  const last = seen.get(sessionID) ?? 0;
+  if (now - last < COOLDOWN_MS) return false;
+  seen.set(sessionID, now);
+  return true;
+}
+
+export function resetCompactionPolicy() {
+  seen.clear();
 }
 
 export async function precompact(
@@ -58,6 +78,7 @@ export async function precompact(
 
   const summary = summarize(result.data);
   if (!summary) return false;
+  if (!shouldCompact(input.sessionID, result.data.length)) return false;
 
   const last = result.data[result.data.length - 1]?.info.id ?? "none";
   const key = `compact:${input.sessionID}:${last}`;

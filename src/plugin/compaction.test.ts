@@ -3,7 +3,12 @@ import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { connect } from "../graph/client";
 import { schema } from "../graph/schema";
-import { precompact, summarize } from "./compaction";
+import {
+  precompact,
+  resetCompactionPolicy,
+  shouldCompact,
+  summarize,
+} from "./compaction";
 
 const root = path.join(process.cwd(), ".tmp", "compaction");
 
@@ -30,7 +35,13 @@ describe("pre-compaction snapshot", () => {
     expect(out).toBe("hello");
   });
 
+  test("policy blocks compact when transcript is too short", () => {
+    resetCompactionPolicy();
+    expect(shouldCompact("s-short", 2, 100)).toBe(false);
+  });
+
   test("precompact persists once with idempotent key", async () => {
+    resetCompactionPolicy();
     const db = await connect({ mode: "local", path: root });
     await schema(db);
 
@@ -45,6 +56,10 @@ describe("pre-compaction snapshot", () => {
             {
               info: { id: "m2" },
               parts: [{ type: "text", text: "second" }],
+            },
+            {
+              info: { id: "m3" },
+              parts: [{ type: "text", text: "third" }],
             },
           ],
         }),
@@ -70,7 +85,7 @@ describe("pre-compaction snapshot", () => {
     )) as { data: Record<string, unknown>[] };
 
     expect(a).toBe(true);
-    expect(b).toBe(true);
+    expect(b).toBe(false);
     expect(entities.data[0]?.count).toBe(1);
     expect(mutations.data[0]?.count).toBe(1);
     await db.close();

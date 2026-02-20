@@ -8,8 +8,9 @@ const attributes = z
 
 const entity = z
   .object({
-    action: z.enum(["create", "update", "delete"]),
+    action: z.enum(["create", "update", "delete", "supersede"]),
     uuid: z.string().optional(),
+    superseded_by_uuid: z.string().optional(),
     name: z.string().optional(),
     label_type: z.string().optional(),
     summary: z.string().optional(),
@@ -32,6 +33,15 @@ const entity = z
       ctx.addIssue({
         code: "custom",
         message: `${value.action} requires uuid`,
+      });
+    }
+    if (
+      value.action === "supersede" &&
+      (!value.uuid || !value.superseded_by_uuid)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "supersede requires uuid and superseded_by_uuid",
       });
     }
   });

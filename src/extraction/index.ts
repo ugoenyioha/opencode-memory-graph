@@ -14,8 +14,9 @@ import { extractionWithPacks } from "./schema";
 import { type Pack } from "../ontology/packs";
 
 export type ExtractedEntity = {
-  action: "create" | "update" | "delete";
+  action: "create" | "update" | "delete" | "supersede";
   uuid?: string;
+  superseded_by_uuid?: string;
   name?: string;
   label_type?: string;
   summary?: string;
@@ -319,6 +320,115 @@ export async function merge(
          OPTIONAL MATCH (e)-[r:RELATES_TO]-()
          SET r.expired_at = $now`,
           { uuid: entity.uuid, now: Date.now() },
+        );
+      }
+
+      if (
+        entity.action === "supersede" &&
+        entity.uuid &&
+        entity.superseded_by_uuid
+      ) {
+        const row = (await read(
+          `MATCH (e:Entity {uuid: $uuid})
+           WHERE (e.project_id = $project_id) OR ($allow_global AND e.scope = 'global')
+           RETURN e.label_type AS label_type, e.attributes AS attributes`,
+          {
+            uuid: entity.uuid,
+            project_id: projectID,
+            allow_global: allowGlobal,
+          },
+        )) as { data: Record<string, unknown>[] };
+        if ((row.data ?? []).length === 0) continue;
+        const label = row.data[0]?.label_type as string | undefined;
+        if (label && !allowed.has(label)) continue;
+
+        const target = (await read(
+          `MATCH (e:Entity {uuid: $uuid})
+           WHERE e.expired_at IS NULL
+             AND ((e.project_id = $project_id) OR ($allow_global AND e.scope = 'global'))
+           RETURN e.uuid AS uuid`,
+          {
+            uuid: entity.superseded_by_uuid,
+            project_id: projectID,
+            allow_global: allowGlobal,
+          },
+        )) as { data: Record<string, unknown>[] };
+        if ((target.data ?? []).length === 0) continue;
+
+        let severity = "";
+        try {
+          const raw = row.data[0]?.attributes as string | undefined;
+          severity = raw ? String(JSON.parse(raw).severity ?? "") : "";
+        } catch {
+          if (label === "Lesson") {
+            await write(
+              `MERGE (q:Quarantine {uuid: $id})
+               ON CREATE SET q.entity_uuid = $uuid, q.reason = 'malformed_lesson_attributes', q.created_at = $now`,
+              { id: `q_${entity.uuid}`, uuid: entity.uuid, now: Date.now() },
+            );
+            continue;
+          }
+        }
+
+        if (
+          label === "Lesson" &&
+          (severity === "blocker" || severity === "warning")
+        ) {
+          await write(
+            `MERGE (q:Quarantine {uuid: $id})
+             ON CREATE SET q.entity_uuid = $uuid, q.reason = 'protected_lesson_supersede', q.created_at = $now`,
+            {
+              id: `q_${entity.uuid}`,
+              uuid: entity.uuid,
+              now: Date.now(),
+            },
+          );
+          continue;
+        }
+
+        const now = Date.now();
+        await write(
+          `MATCH (e:Entity {uuid: $uuid})
+           SET e.expired_at = $now
+           WITH e
+           OPTIONAL MATCH (e)-[r:RELATES_TO]-()
+           SET r.expired_at = $now`,
+          { uuid: entity.uuid, now },
+        );
+
+        const rid = relationId(
+          entity.uuid,
+          "superseded_by",
+          entity.superseded_by_uuid,
+        );
+        await write(
+          `MATCH (a:Entity {uuid: $source_uuid}), (b:Entity {uuid: $target_uuid})
+           WHERE (a.project_id = $project_id OR ($allow_global AND a.scope = 'global'))
+             AND (b.project_id = $project_id OR ($allow_global AND b.scope = 'global'))
+           MERGE (a)-[r:RELATES_TO {uuid: $uuid}]->(b)
+           ON CREATE SET
+             r.name = $rel_name,
+             r.fact = $fact,
+             r.valid_at = $now,
+             r.invalid_at = null,
+             r.expired_at = null,
+             r.episodes = [],
+             r.attributes = '{}',
+             r.created_at = $now
+           ON MATCH SET
+             r.fact = $fact,
+             r.invalid_at = null,
+             r.expired_at = null`,
+          {
+            source_uuid: entity.uuid,
+            target_uuid: entity.superseded_by_uuid,
+            project_id: projectID,
+            allow_global: allowGlobal,
+            uuid: rid,
+            rel_name: "superseded_by",
+            fact: "entity was superseded by a newer memory",
+            now,
+          },
         );
       }
     }

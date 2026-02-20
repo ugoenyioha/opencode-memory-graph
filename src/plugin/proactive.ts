@@ -21,6 +21,37 @@ const THRESHOLDS = {
   warning: 0.85,
 } as const;
 
+function attrs(value: unknown) {
+  if (typeof value !== "string") return {} as Record<string, string>;
+  try {
+    const out = JSON.parse(value) as unknown;
+    if (!out || typeof out !== "object") return {};
+    return out as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+export function pick(rows: Record<string, unknown>[]) {
+  return rows.flatMap((row) => {
+    const score = row.score as number;
+    const map = attrs(row.attributes);
+    const severity = map.severity ?? "warning";
+    const threshold =
+      THRESHOLDS[severity as keyof typeof THRESHOLDS] ?? THRESHOLDS.warning;
+    if (score < threshold) return [];
+    return [
+      {
+        uuid: row.uuid as string,
+        name: row.name as string,
+        summary: row.summary as string,
+        severity,
+        resolution: map.resolution,
+      } satisfies Warning,
+    ];
+  });
+}
+
 export async function check(
   db: GraphClient,
   message: string,
@@ -38,30 +69,7 @@ export async function check(
     { vec },
   )) as { data: Record<string, unknown>[] };
 
-  const warnings: Warning[] = [];
-  for (const row of result.data ?? []) {
-    const score = row.score as number;
-    let attrs: Record<string, string> = {};
-    try {
-      attrs = JSON.parse(row.attributes as string);
-    } catch {}
-
-    const severity = attrs.severity ?? "warning";
-    const threshold =
-      THRESHOLDS[severity as keyof typeof THRESHOLDS] ?? THRESHOLDS.warning;
-
-    if (score >= threshold) {
-      warnings.push({
-        uuid: row.uuid as string,
-        name: row.name as string,
-        summary: row.summary as string,
-        severity,
-        resolution: attrs.resolution,
-      });
-    }
-  }
-
-  return warnings;
+  return pick(result.data ?? []);
 }
 
 export function format(warnings: Warning[]): string {

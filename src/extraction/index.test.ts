@@ -335,6 +335,158 @@ describe("extraction merge", () => {
     await db.close();
   });
 
+  test("supersede action expires old entity and links replacement", async () => {
+    const dir = path.join(root, "supersede");
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+    const db = await connect({ mode: "local", path: dir });
+    await schema(db);
+
+    await merge(
+      db,
+      {
+        entities: [
+          {
+            action: "create",
+            name: "SpiceDB endpoint old",
+            label_type: "Decision",
+            summary: "old endpoint",
+            attributes: {},
+            scope: "project",
+            source: "auto",
+            confidence: "confirmed",
+          },
+          {
+            action: "create",
+            name: "SpiceDB endpoint new",
+            label_type: "Decision",
+            summary: "new endpoint",
+            attributes: {},
+            scope: "project",
+            source: "auto",
+            confidence: "confirmed",
+          },
+        ],
+        relationships: [],
+      },
+      { mutation_key: "supersede-seed", scope: "project" },
+    );
+
+    const row = (await db.roQuery(
+      `MATCH (e:Entity)
+       WHERE e.name IN ['SpiceDB endpoint old', 'SpiceDB endpoint new']
+       RETURN e.name AS name, e.uuid AS uuid`,
+    )) as { data: Record<string, unknown>[] };
+    const old = row.data.find((item) => item.name === "SpiceDB endpoint old")
+      ?.uuid as string;
+    const next = row.data.find((item) => item.name === "SpiceDB endpoint new")
+      ?.uuid as string;
+
+    await merge(
+      db,
+      {
+        entities: [
+          {
+            action: "supersede",
+            uuid: old,
+            superseded_by_uuid: next,
+          },
+        ],
+        relationships: [],
+      },
+      { mutation_key: "supersede-run", scope: "project" },
+    );
+
+    const expired = (await db.roQuery(
+      `MATCH (e:Entity {uuid: $uuid}) RETURN e.expired_at AS expired_at`,
+      { uuid: old },
+    )) as { data: Record<string, unknown>[] };
+    const rel = (await db.roQuery(
+      `MATCH (:Entity {uuid: $old})-[r:RELATES_TO {name: 'superseded_by'}]->(:Entity {uuid: $next})
+       RETURN count(r)`,
+      { old, next },
+    )) as { data: Record<string, unknown>[] };
+
+    expect(Number(expired.data[0]?.expired_at ?? 0)).toBeGreaterThan(0);
+    expect(rel.data[0]?.["count(r)"]).toBe(1);
+    await db.close();
+  });
+
+  test("supersede action quarantines protected lessons", async () => {
+    const dir = path.join(root, "supersede-lesson");
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+    const db = await connect({ mode: "local", path: dir });
+    await schema(db);
+
+    await merge(
+      db,
+      {
+        entities: [
+          {
+            action: "create",
+            name: "Wrong endpoint",
+            label_type: "Lesson",
+            summary: "do not use",
+            attributes: { severity: "blocker" },
+            scope: "project",
+            source: "auto",
+            confidence: "confirmed",
+          },
+          {
+            action: "create",
+            name: "Replacement lesson",
+            label_type: "Lesson",
+            summary: "replacement",
+            attributes: { severity: "warning" },
+            scope: "project",
+            source: "auto",
+            confidence: "confirmed",
+          },
+        ],
+        relationships: [],
+      },
+      { mutation_key: "supersede-lesson-seed", scope: "project" },
+    );
+
+    const row = (await db.roQuery(
+      `MATCH (e:Entity)
+       WHERE e.name IN ['Wrong endpoint', 'Replacement lesson']
+       RETURN e.name AS name, e.uuid AS uuid`,
+    )) as { data: Record<string, unknown>[] };
+    const old = row.data.find((item) => item.name === "Wrong endpoint")
+      ?.uuid as string;
+    const next = row.data.find((item) => item.name === "Replacement lesson")
+      ?.uuid as string;
+
+    await merge(
+      db,
+      {
+        entities: [
+          {
+            action: "supersede",
+            uuid: old,
+            superseded_by_uuid: next,
+          },
+        ],
+        relationships: [],
+      },
+      { mutation_key: "supersede-lesson-run", scope: "project" },
+    );
+
+    const expired = (await db.roQuery(
+      `MATCH (e:Entity {uuid: $uuid}) RETURN e.expired_at AS expired_at`,
+      { uuid: old },
+    )) as { data: Record<string, unknown>[] };
+    const quarantine = (await db.roQuery(
+      `MATCH (q:Quarantine) WHERE q.reason = 'protected_lesson_supersede' RETURN count(q)`,
+    )) as { data: Record<string, unknown>[] };
+
+    expect(expired.data[0]?.expired_at).toBeNull();
+    expect(quarantine.data[0]?.["count(q)"]).toBe(1);
+    await db.close();
+  });
+
   test("reservation namespace is project-scoped", async () => {
     const dir = path.join(root, "mutation-scope");
     await rm(dir, { recursive: true, force: true });

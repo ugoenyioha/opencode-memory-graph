@@ -107,3 +107,9 @@ export function format(entities: TierEntity[]): string {
   );
   return lines.join("\n");
 }
+
+export function cap(text: string, tokens: number) {
+  const max = Math.max(tokens, 0) * 4;
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(max - 20, 0))}\n- [Truncated]`;
+}

@@ -147,12 +147,14 @@ A knowledge graph can. Entities have relationships, facts have timestamps, and l
 
 ## Documentation
 
-| Document                     | What it covers                                                                   |
-| ---------------------------- | -------------------------------------------------------------------------------- |
-| [Usage](docs/usage.md)       | Quickstart, config, local vs remote status, security defaults, troubleshooting   |
-| [Design](docs/design.md)     | Architecture, storage backend, plugin integration, search pipeline, memory tiers |
-| [Ontology](docs/ontology.md) | Entity labels, relationship types, edge properties, the Lesson entity            |
-| [Research](docs/research.md) | Comparative analysis of 15+ tools, technology decisions, key findings            |
+| Document                                      | What it covers                                                                   |
+| --------------------------------------------- | -------------------------------------------------------------------------------- |
+| [Usage](docs/usage.md)                        | Quickstart, config, local vs remote status, security defaults, troubleshooting   |
+| [Orbstack E2E](docs/e2e-opencode-orbstack.md) | Repeatable end-to-end workflow from DB bring-up to teardown                      |
+| [Plan Conformance](docs/plan-conformance.md)  | Phase/deferred audit of implementation vs plan, including acknowledged changes   |
+| [Design](docs/design.md)                      | Architecture, storage backend, plugin integration, search pipeline, memory tiers |
+| [Ontology](docs/ontology.md)                  | Entity labels, relationship types, edge properties, the Lesson entity            |
+| [Research](docs/research.md)                  | Comparative analysis of 15+ tools, technology decisions, key findings            |
 
 ## Technology choices
 

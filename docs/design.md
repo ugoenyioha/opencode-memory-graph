@@ -8,6 +8,8 @@ Architecture and technical decisions for the opencode-memory-graph plugin.
 
 A plugin that gives AI agents persistent, structured memory using a temporal knowledge graph. Built on FalkorDB (Cypher) with two deployment modes: embedded local and remote server.
 
+For implementation status and explicit scope changes against the original roadmap, see `docs/plan-conformance.md`.
+
 The memory graph is domain-agnostic at its core. A pluggable ontology system lets different use cases register their own entity types: coding agents track Components and Patterns, ops/IGA agents track Services and Endpoints, general agents track People and Resources. The core (Decisions, Lessons, Preferences, Tasks, Concepts) works identically across all domains.
 
 The plugin hooks into the host's session lifecycle to automatically extract and store knowledge, and exposes tools for the LLM to search and retrieve memories.
@@ -70,7 +72,7 @@ Switching modes requires only a config change. The graph schema and all queries 
 The plugin uses OpenCode's plugin API to hook into lifecycle events and register tools.
 
 > [!IMPORTANT]
-> **Current MVP runtime hooks differ from the target architecture table below.** Active hooks today are `experimental.chat.system.transform`, `chat.message`, `experimental.session.compacting`, and `tool.execute.after` (placeholder TODO). Message extraction currently writes synchronously per message. Pre-compaction snapshot persistence is implemented with idempotent dedupe, but there is still no background extraction queue.
+> **Current MVP runtime hooks differ from the target architecture table below.** Active hooks today are `experimental.chat.system.transform`, `chat.message`, `experimental.session.compacting`, and `tool.execute.after` (placeholder TODO). Message extraction writes synchronously per message. Pre-compaction snapshot persistence is implemented with idempotent dedupe, but there is still no background extraction queue.
 
 ### Hooks
 
@@ -154,7 +156,7 @@ Budget: ~2000 tokens. Kept lean to avoid eating context window.
 
 ### Working tier
 
-**Session-active** context (planned). Currently only core-tier loads at session start — working-tier code exists but is not used by the active runtime path.
+**Session-active** context. Working-tier entities are now loaded during `experimental.chat.system.transform` with a separate budget cap (~1000 token target).
 
 Contents:
 

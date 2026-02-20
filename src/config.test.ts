@@ -110,4 +110,21 @@ describe("security baseline config", () => {
     delete process.env.MEMORY_GRAPH_PASSWORD;
     delete process.env.MEMORY_GRAPH_TLS;
   });
+
+  test("runtime helper toggles proactive from env", () => {
+    process.env.MEMORY_GRAPH_PROACTIVE = "1";
+    const on = runtime();
+    expect(on.proactive.enabled).toBe(true);
+
+    delete process.env.MEMORY_GRAPH_PROACTIVE;
+    const off = runtime();
+    expect(off.proactive.enabled).toBe(false);
+  });
+
+  test("runtime helper parses cloud embedding mode", () => {
+    process.env.MEMORY_EMBEDDINGS = "cloud";
+    const out = runtime();
+    expect(out.embeddings).toBe("cloud");
+    delete process.env.MEMORY_EMBEDDINGS;
+  });
 });

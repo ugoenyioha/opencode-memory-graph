@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install
+      - run: bun run typecheck
+      - run: bun test
+
+  remote-validation:
+    runs-on: ubuntu-latest
+    needs: test
+    if: ${{ vars.MEMORY_GRAPH_HOST != '' }}
+    env:
+      RUN_REMOTE_GRAPH_TEST: "1"
+      MEMORY_GRAPH_HOST: ${{ vars.MEMORY_GRAPH_HOST }}
+      MEMORY_GRAPH_PORT: ${{ vars.MEMORY_GRAPH_PORT || '443' }}
+      MEMORY_GRAPH_TLS: ${{ vars.MEMORY_GRAPH_TLS || 'true' }}
+      MEMORY_GRAPH_PASSWORD: ${{ secrets.MEMORY_GRAPH_PASSWORD }}
+      NODE_TLS_REJECT_UNAUTHORIZED: ${{ vars.NODE_TLS_REJECT_UNAUTHORIZED || '0' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install
+      - run: bun test src/graph/remote.test.ts

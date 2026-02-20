@@ -31,7 +31,7 @@ const remote = z
     },
   );
 
-const embeddings = z.enum(["off", "local"]).default("off");
+const embeddings = z.enum(["off", "local", "cloud"]).default("off");
 const scope = z.enum(["project", "session", "global"]).default("project");
 const packLabel = z.object({
   name: z.string().min(1),
@@ -86,10 +86,18 @@ export function runtime(): Config {
         };
 
   const embeddings =
-    process.env.MEMORY_EMBEDDINGS === "local" ? "local" : "off";
+    process.env.MEMORY_EMBEDDINGS === "local"
+      ? "local"
+      : process.env.MEMORY_EMBEDDINGS === "cloud"
+        ? "cloud"
+        : "off";
+  const proactive = {
+    enabled: process.env.MEMORY_GRAPH_PROACTIVE === "1",
+  };
   return config({
     storage,
     embeddings,
     default_scope: "project",
+    proactive,
   });
 }

@@ -25,6 +25,29 @@ describe("extraction schema", () => {
     ).toThrow();
   });
 
+  test("accepts valid supersede payload", () => {
+    const out = extraction({
+      entities: [
+        {
+          action: "supersede",
+          uuid: "old",
+          superseded_by_uuid: "new",
+        },
+      ],
+      relationships: [],
+    });
+    expect(out.entities.length).toBe(1);
+  });
+
+  test("rejects supersede payload without replacement uuid", () => {
+    expect(() =>
+      extraction({
+        entities: [{ action: "supersede", uuid: "old" }],
+        relationships: [],
+      }),
+    ).toThrow("supersede requires uuid and superseded_by_uuid");
+  });
+
   test("rejects unknown labels for selected packs", () => {
     expect(() =>
       extractionWithPacks(

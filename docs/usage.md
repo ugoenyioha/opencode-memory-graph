@@ -4,12 +4,14 @@ Practical usage for end users and operators, aligned to current MVP behavior.
 
 ## Current status
 
+For a phase/deferred-item implementation audit with explicit plan changes, see `docs/plan-conformance.md`.
+
 | Capability           | Status                                                      |
 | -------------------- | ----------------------------------------------------------- |
 | Local FalkorDB mode  | Supported and test-validated                                |
 | Remote FalkorDB mode | Runtime-supported, hardening and E2E validation in progress |
-| Embedding search     | Optional local embeddings, with FTS fallback                |
-| Proactive warnings   | Code exists, not wired into active runtime hooks            |
+| Embedding search     | Local or cloud-provider chain with safe FTS fallback        |
+| Proactive warnings   | Runtime-wired (opt-in via `MEMORY_GRAPH_PROACTIVE=1`)       |
 
 ## Prerequisites
 
@@ -43,8 +45,19 @@ bun run build
   - Local FalkorDB storage directory.
   - Default: `~/.opencode/memory`
 - `MEMORY_EMBEDDINGS`
-  - `off` (default) or `local`
-  - `local` enables local embedding model loading; failure degrades to FTS-only mode.
+  - `off` (default), `local`, or `cloud`
+  - `local` enables local embedding model loading; failure falls through provider chain then FTS-only mode.
+  - `cloud` skips local model and uses provider chain then FTS-only mode.
+- `MEMORY_EMBED_PROVIDERS`
+  - Comma-separated fallback order (default: `openai,voyage`).
+  - Supported: `openai`, `voyage`.
+- `OPENAI_API_KEY` / `MEMORY_EMBED_OPENAI_MODEL` / `MEMORY_EMBED_OPENAI_URL`
+  - Optional OpenAI provider config for embedding fallback.
+- `VOYAGE_API_KEY` / `MEMORY_EMBED_VOYAGE_MODEL` / `MEMORY_EMBED_VOYAGE_URL`
+  - Optional Voyage provider config for embedding fallback.
+- `MEMORY_GRAPH_PROACTIVE`
+  - `1` enables proactive lesson surfacing during `chat.message` processing.
+  - default is disabled (`0` / unset).
 
 ### Environment variables (test-only)
 
@@ -111,7 +124,10 @@ export MEMORY_GRAPH_HOST="falkordb.example.internal"
 export MEMORY_GRAPH_PORT="6379"
 export MEMORY_GRAPH_PASSWORD="..."
 export MEMORY_GRAPH_TLS="true"
-export MEMORY_EMBEDDINGS="off"
+export MEMORY_EMBEDDINGS="cloud"
+export MEMORY_EMBED_PROVIDERS="openai,voyage"
+export OPENAI_API_KEY="..."
+export MEMORY_GRAPH_PROACTIVE="1"
 ```
 
 2. Start OpenCode and verify plugin boot succeeds.
@@ -123,6 +139,36 @@ RUN_REMOTE_GRAPH_TEST=1 bun test src/graph/remote.test.ts
 ```
 
 Note: remote mode is supported but still requires production soak validation.
+
+## Orbstack remote test deployment
+
+Use the provided manifest to run an isolated FalkorDB instance for plugin remote-mode validation:
+
+```bash
+kubectl apply -f docs/k8s/orbstack-falkordb-remote-test.yaml
+kubectl -n opencode-memory-graph-test rollout status statefulset/falkordb-memory-graph
+```
+
+Expected in-cluster endpoint:
+
+- Host: `falkordb-memory-graph.opencode-memory-graph-test.svc.cluster.local`
+- Port: `6379`
+
+Example harness env vars for this deployment (direct client test, plain TCP):
+
+```bash
+export MEMORY_GRAPH_MODE="remote"
+export MEMORY_GRAPH_HOST="falkordb-memory-graph.opencode-memory-graph-test.svc.cluster.local"
+export MEMORY_GRAPH_PORT="6379"
+export MEMORY_GRAPH_PASSWORD="" # optional for no-auth test deployments
+export MEMORY_GRAPH_TLS="false"
+```
+
+This manifest is plain TCP for simple connectivity checks. OpenCode plugin runtime currently enforces remote config validation with `tls: true` and non-local host, so full remote OpenCode startup requires a TLS-enabled endpoint/proxy.
+
+For full lifecycle validation (bring-up, connectivity checks, OpenCode E2E checks, teardown), use `docs/e2e-opencode-orbstack.md`.
+
+If you need OpenCode remote-mode startup validation, use the TLS ingress manifest `docs/k8s/orbstack-falkordb-remote-test-ingress-tcp.yaml` from the E2E runbook.
 
 ## Operator checks
 
