@@ -4,6 +4,8 @@ The formal schema of entity types, relationship types, and their properties. Thi
 
 The approach is **semi-structured**: a well-defined set of core entity labels for things coding assistants commonly need to remember, with extensible attributes for project-specific concepts. New labels can be added without schema changes.
 
+> **FalkorDB limitation**: Maps cannot be stored as property values. All `attributes` fields in this schema are stored as **JSON strings** and parsed/serialized in the application layer. The `json.fromJsonMap()` / `json.toJson()` UDFs can be used in Cypher queries when needed. See `docs/schema.cypher` for the concrete implementation.
+
 ---
 
 ## Three-layer graph
@@ -20,8 +22,8 @@ Raw conversation data. Each episode is a message or tool result from a session, 
   content: STRING,
   source: STRING,       // "message" | "tool_result" | "file_change"
   session_id: STRING,
-  created_at: DATETIME,
-  valid_at: DATETIME
+  created_at: INTEGER,  // Unix ms
+  valid_at: INTEGER     // Unix ms
 })
 
 (:Episode)-[:NEXT]->(:Episode)
@@ -41,15 +43,17 @@ All entities share a base shape:
   uuid: STRING,
   name: STRING,
   summary: STRING,
-  name_embedding: LIST<FLOAT>,
-  labels: LIST<STRING>,     // e.g. ["Entity", "Decision"]
-  attributes: MAP,          // label-specific properties (JSON)
-  scope: STRING,            // "global" | "project" | "session"
-  source: STRING,           // "auto" | "user" | "import" | "inferred"
-  confidence: STRING,       // "confirmed" | "suspected" | "speculative"
-  validated_at: DATETIME,   // last time checked against current state
-  ttl: INTEGER,             // optional time-to-live in days (null = permanent)
-  created_at: DATETIME
+  name_embedding: LIST<FLOAT>,  // 384-dim vector (all-MiniLM-L6-v2)
+  label_type: STRING,            // e.g. "Decision", "Lesson", "Tool"
+  labels: LIST<STRING>,          // e.g. ["Entity", "Decision"]
+  attributes: STRING,            // JSON string (FalkorDB cannot store MAPs)
+  scope: STRING,                 // "global" | "project" | "session"
+  source: STRING,                // "auto" | "user" | "import" | "inferred"
+  confidence: STRING,            // "confirmed" | "suspected" | "speculative"
+  validated_at: INTEGER,         // Unix ms — last time checked
+  ttl: INTEGER,                  // optional time-to-live in days (null = permanent)
+  created_at: INTEGER,           // Unix ms
+  trigger_embedding: LIST<FLOAT> // 384-dim, only for Lesson entities (null otherwise)
 })
 ```
 
@@ -64,8 +68,8 @@ Auto-detected clusters of strongly connected entities. Each community gets a nam
   uuid: STRING,
   name: STRING,
   summary: STRING,
-  name_embedding: LIST<FLOAT>,
-  created_at: DATETIME
+  name_embedding: LIST<FLOAT>,  // 384-dim vector
+  created_at: INTEGER            // Unix ms
 })
 
 (:Community)-[:HAS_MEMBER]->(:Entity)
@@ -143,13 +147,13 @@ Relationships are edges between entities. Each edge carries properties that desc
   uuid: STRING,
   name: STRING,               // relationship type name
   fact: STRING,                // natural language statement of the relationship
-  fact_embedding: LIST<FLOAT>, // for semantic search over relationships
-  valid_at: DATETIME,          // when this fact became true
-  invalid_at: DATETIME,        // when this fact stopped being true (null = still valid)
-  expired_at: DATETIME,        // when this edge was superseded by a newer one
+  fact_embedding: LIST<FLOAT>, // 384-dim vector for semantic search over relationships
+  valid_at: INTEGER,           // Unix ms — when this fact became true
+  invalid_at: INTEGER,         // Unix ms — when this fact stopped being true (null = still valid)
+  expired_at: INTEGER,         // Unix ms — when this edge was superseded by a newer one
   episodes: LIST<STRING>,      // UUIDs of episodes that reference this edge
-  attributes: MAP,             // edge-type-specific properties
-  created_at: DATETIME
+  attributes: STRING,          // JSON string (FalkorDB cannot store MAPs)
+  created_at: INTEGER          // Unix ms
 }]->(:Entity)
 ```
 
@@ -187,11 +191,13 @@ Inspired by Graphiti's bi-temporal approach. Every edge has three temporal field
 - **`invalid_at`** — When did this fact stop being true? (e.g., if FalkorDB is later replaced, this edge gets `invalid_at` set)
 - **`expired_at`** — When was this edge superseded by a new version? (Internal bookkeeping — the edge still exists for history, but a newer edge has replaced it)
 
+All temporal fields use **Unix milliseconds** (INTEGER) rather than FalkorDB's native datetime types. This simplifies cross-language serialization and makes range queries straightforward.
+
 This enables queries like:
 
-- "What decisions are currently valid?" — `WHERE e.invalid_at IS NULL`
-- "What changed in the last week?" — `WHERE e.created_at > datetime() - duration('P7D')`
-- "What was the architecture before we switched to FalkorDB?" — `WHERE e.valid_at < '2026-02-20'`
+- "What decisions are currently valid?" — `WHERE r.invalid_at IS NULL`
+- "What changed in the last week?" — `WHERE r.created_at > $seven_days_ago`
+- "What was the architecture before we switched to FalkorDB?" — `WHERE r.valid_at < 1708300800000`
 - "Show me the chain of decisions that led to the current architecture" — traverse `led_to` and `supersedes` edges
 
 ---
@@ -246,3 +252,9 @@ Every entity tracks where it came from:
 | `inferred` | Derived by the plugin from patterns in the graph (e.g., community detection) |
 
 This matters for trust. A `user`-sourced entity with `confidence: "confirmed"` is more trustworthy than an `auto`-sourced entity with `confidence: "speculative"`. The search pipeline weights accordingly.
+
+---
+
+## Concrete schema
+
+The complete FalkorDB Cypher schema — indexes, constraints, node/edge shapes, and common query patterns — is in [`docs/schema.cypher`](./schema.cypher). The entity extraction prompt template is in [`docs/extraction-prompt.md`](./extraction-prompt.md).

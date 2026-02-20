@@ -14,7 +14,7 @@ OpenClaw (formerly Claw) has the most sophisticated open-source memory implement
 
 - **Markdown-first storage** — Source of truth is plain `.md` files in the workspace. The SQLite index is derived and fully rebuildable from these files. This means memory is human-readable, git-trackable, and survives database corruption.
 - **Per-agent isolation** — Each agent gets its own SQLite database. No cross-contamination between different agent personas.
-- **Chunking** — Files are split into ~400-token chunks with ~80 token overlap. Each chunk tracks its source file and line numbers for citations.
+- **Chunking** — Files are split into ~400-token chunks with ~80 token overlap (`internal.ts:chunkMarkdown()`). Each chunk tracks its source file and line numbers for citations.
 
 #### Techniques worth adopting
 
@@ -30,6 +30,22 @@ OpenClaw (formerly Claw) has the most sophisticated open-source memory implement
 | **MEMORY.md bootstrap**               | On first use, OpenClaw loads a `MEMORY.md` file from the workspace to seed initial context. Defined in `agents/workspace.ts`.                                                                                                                                                                               | We bootstrap from `projectBrief.md`, `README.md`, or `CLAUDE.md` — whatever exists in the workspace.                                                                                                                           |
 | **Session transcript indexing**       | Experimental, opt-in. Indexes JSONL session files so you can search "when did we discuss X?" Defined in `session-files.ts`.                                                                                                                                                                                 | Deferred to v2. Our episodic layer (Layer 1) serves a similar purpose but stores episodes in the graph rather than indexing external files.                                                                                    |
 | **Sync triggers and file watching**   | Detects when `.md` files change on disk and re-indexes them. Per-file change detection avoids re-processing unchanged files. Defined in `manager-sync-ops.ts` and `sync-index.ts`.                                                                                                                          | Not directly applicable — our source of truth is the graph, not markdown files. But the principle of incremental updates (only process what changed) applies to our entity extraction pipeline.                                |
+
+#### Deep source analysis
+
+From reading the full source code of OpenClaw's memory system, several implementation details are worth documenting.
+
+**Hybrid search pipeline (`hybrid.ts`)** — The merge is straightforward: results from vector search and BM25 keyword search are combined by ID (if a result appears in both, scores are summed as `vectorWeight * vectorScore + textWeight * textScore`). Default weights are 70% vector / 30% BM25. After merging, temporal decay is applied, then MMR. The pipeline has no graph traversal step since there's no graph.
+
+**Temporal decay (`temporal-decay.ts`)** — The formula `score *= exp(-lambda * age_days)` uses `lambda = ln(2) / halfLifeDays` with a default half-life of 30 days. "Evergreen" files are exempt from decay entirely — these are `MEMORY.md` and any undated files in the `memory/` directory. Dated files matching `memory/YYYY-MM-DD.md` get their age computed from the filename date. All other files fall back to file `mtime`. This evergreen exemption is the direct inspiration for our global-scope exemption on Lesson and Preference entities.
+
+**MMR diversity re-ranking (`mmr.ts`)** — Uses **Jaccard similarity on tokenized text** rather than embedding cosine similarity. The formula is `λ * normalized_relevance - (1-λ) * max_jaccard_to_selected` with default λ=0.7. Scores are normalized to [0,1] before MMR is applied. Items are pre-tokenized to avoid redundant string splitting. The Jaccard approach is cheaper than computing cosine on embeddings but less precise — we should use embedding cosine since we already have the vectors.
+
+**Pre-compaction memory flush (`memory-flush.ts`)** — Triggered when `totalTokens >= contextWindow - reserveTokens - softThreshold` (default soft threshold is 4000 tokens). The flush injects a silent agentic turn with the prompt: "Pre-compaction memory flush. Store durable memories now (use memory/YYYY-MM-DD.md)." It uses a `SILENT_REPLY_TOKEN` for no-op responses when there's nothing to save. The system tracks `memoryFlushCompactionCount` to avoid double-flushing on the same compaction event — a detail we need to replicate.
+
+**Compaction (`compaction.ts`)** — Messages are chunked by token budget, each chunk is summarized, then summaries are merged into a final summary. The chunk ratio is adaptive based on average message size. There's a fallback path for oversized individual messages that exceed the chunk budget. This is OpenCode's responsibility, not ours — we just hook `experimental.session.compacting` to extract before it happens.
+
+**Query expansion (`query-expansion.ts`)** — For FTS-only mode. Removes English and Chinese stop words, extracts keywords, builds `original OR keyword1 OR keyword2` queries. There's an optional LLM-based expansion path that rewrites the query for better recall. We'll adopt the keyword extraction path for our FTS fallback but skip LLM-based expansion (too expensive for a fallback path).
 
 #### What OpenClaw doesn't do (and we improve on)
 
@@ -142,6 +158,35 @@ class EntityEdge(Edge):
 - Dynamic labels rather than rigid node classes
 - Multi-provider support pattern (their `GraphDriver` abstraction)
 
+#### Deep source analysis
+
+From reading Graphiti's core Python source (`graphiti_core/`), the extraction and search pipelines are significantly more sophisticated than what we initially assumed.
+
+**Multi-step extraction pipeline** — Graphiti does NOT extract entities and relationships in a single LLM call. It runs a sequence of separate LLM calls:
+
+1. **Extract entities** (`prompts/extract_nodes.py`) — Extracts speaker + entities from conversation. Separates PREVIOUS MESSAGES (provided as read-only context) from CURRENT MESSAGE (the actual extraction target). Supports custom extraction instructions. Explicitly excludes relationships, actions, and temporal info from this step.
+2. **Classify entity types** — Maps each extracted entity to a type from the ontology using `entity_type_id` fields.
+3. **Extract edges/facts** (`prompts/extract_edges.py`) — Extracts fact triples with `source_entity_name`, `target_entity_name`, `relation_type` (SCREAMING_SNAKE_CASE), `fact` (natural language), `valid_at`, `invalid_at`. Uses a `REFERENCE_TIME` for resolving relative temporal expressions like "yesterday" or "last week." Relation types come from the ontology when possible, otherwise derived from the predicate.
+4. **Extract attributes** — Pulls label-specific properties for each entity.
+5. **Generate summaries** (`prompts/extract_nodes.py:extract_summaries_batch`) — Batch-summarizes multiple entities in one call for efficiency.
+6. **Deduplicate** (`prompts/dedupe_nodes.py`) — LLM-based dedup, not just embedding similarity. Sends the new entity plus a list of existing entities to the LLM and asks "is this a duplicate?" Returns `duplicate_name` (matching existing entity name) or empty string. Has both single-entity and batch dedup modes. Key rule: "Entities should only be considered duplicates if they refer to the _same real-world object or concept_."
+
+This is much more granular than our single-prompt approach. The tradeoff is obvious: more LLM calls = better accuracy but higher latency and cost. We stick with a single extraction prompt for v1 (coding conversations are more structured than general conversation, reducing ambiguity), but should revisit multi-step extraction if quality is insufficient.
+
+**4-dimensional parallel search (`search/search.py`)** — Graphiti searches four dimensions simultaneously: edges, nodes, episodes, and communities. Each dimension supports multiple search methods (BM25, cosine_similarity, BFS) and multiple rerankers:
+
+| Reranker                         | What it does                                                        |
+| -------------------------------- | ------------------------------------------------------------------- |
+| **RRF** (Reciprocal Rank Fusion) | Merges results from different search methods by reciprocal rank     |
+| **MMR**                          | Uses actual embedding cosine similarity (not Jaccard like OpenClaw) |
+| **Cross-encoder**                | Runs a cross-encoder model for highest quality reranking            |
+| **Node distance**                | Boosts results closer in graph distance to the query entities       |
+| **Episode mentions**             | Boosts entities mentioned in recent episodes                        |
+
+Results from all four dimensions are merged using RRF. This is the most comprehensive search pipeline of any system we analyzed. Our hybrid search is simpler (vector + graph traversal + temporal decay + MMR) but our graph traversal dimension partly covers what their node_distance reranker and episode_mentions do.
+
+**Batch summary generation** — Graphiti generates entity summaries from surrounding edges, not from the original conversation text. This means summaries stay current as new edges are added. We should consider periodic re-summarization as an optimization for v2.
+
 #### What Graphiti doesn't do (and we add)
 
 - No `Lesson` / anti-pattern concept
@@ -156,15 +201,55 @@ class EntityEdge(Edge):
 
 ### Mem0 (graph memory mode)
 
-Mem0 extracts entities and relationships from conversations and stores them in a graph (Neo4j, Memgraph, or Kuzu). It's focused on general-purpose AI assistant memory, not coding-specific.
+**Repo:** [mem0ai/mem0](https://github.com/mem0ai/mem0) | Python | Apache-2.0
 
-#### Key observations
+Mem0 has both a flat vector memory mode and a graph memory mode. The graph mode extracts entities and relationships from conversations and stores them in Neo4j (primary), Memgraph, or Kuzu. Full source at `/tmp/mem0/mem0/memory/graph_memory.py` and `/tmp/mem0/mem0/graphs/`.
 
-- Entity extraction via LLM — sends conversation to GPT/Claude with an extraction prompt, gets back structured entities and relationships.
-- Deduplication by name similarity — avoids creating duplicate nodes for the same concept mentioned differently.
-- No temporal model — entities exist or they don't. No validity tracking.
-- No coding-specific entity types.
-- Good validation of the approach: LLM-based extraction into a knowledge graph works and is the industry direction.
+#### Architecture
+
+- **Neo4j via LangChain** — Uses `langchain_neo4j.Neo4jGraph` as the graph driver. Also supports Memgraph and Kuzu through separate memory classes (`memgraph_memory.py`, `kuzu_memory.py`).
+- **Two-step extraction** — Step 1: extract entities and their types via LLM tool call. Step 2: extract relationships between those entities via a second LLM call. Simpler than Graphiti's 6-step pipeline but more structured than a single prompt.
+- **Embedding-based dedup** — Nodes are matched by embedding cosine similarity (threshold 0.7 by default), not by name. When adding a new entity, Mem0 searches for existing nodes with similar embeddings and merges into the closest match if above threshold.
+- **BM25 reranking on search** — Search results (source/relationship/destination triples) are reranked using BM25Okapi, returning top 5.
+- **Mentions counter** — Nodes and edges track a `mentions` count that increments on each MERGE. This is a simple alternative to our confidence model.
+
+#### Deep source analysis
+
+**Fact extraction prompts (`configs/prompts.py`)** — Mem0 has three extraction modes:
+
+1. **Legacy `FACT_RETRIEVAL_PROMPT`** — "Personal Information Organizer" that extracts facts as flat strings (`{"facts": ["Name is John", "Is a software engineer"]}`). Few-shot examples. Returns empty array for irrelevant input. Language-aware (records facts in user's language).
+2. **`USER_MEMORY_EXTRACTION_PROMPT`** — Enhanced version that explicitly excludes assistant and system messages. Same JSON format. Includes few-shot examples showing assistant responses that should NOT be extracted from. Has a strong emphasis via repeated `[IMPORTANT]` markers.
+3. **`AGENT_MEMORY_EXTRACTION_PROMPT`** — Mirror of the user prompt but for extracting facts about the assistant's personality, capabilities, and preferences. Only extracts from assistant messages.
+
+The extraction prompts are notably simple compared to Graphiti's. No structured schema, no entity types, no relationships — just flat fact strings. The graph structure is added in a separate step.
+
+**Memory update logic (`DEFAULT_UPDATE_MEMORY_PROMPT`)** — After extracting new facts, Mem0 sends them alongside existing memories to the LLM with a 4-operation prompt: ADD, UPDATE, DELETE, or NONE. Each operation includes detailed examples. The LLM decides what to do with each fact against the existing memory store. This is a clever approach — the LLM acts as a merge engine, handling semantic dedup, conflict resolution, and supersession in one call.
+
+**Graph entity extraction (`graph_memory.py:_retrieve_nodes_from_data`)** — Uses LLM function calling with an `extract_entities` tool that returns `{entity, entity_type}` pairs. Self-references ("I", "me", "my") are mapped to the user_id. Entity names are lowercased and spaces replaced with underscores.
+
+**Relationship extraction (`graph_memory.py:_establish_nodes_relations_from_data`)** — Second LLM call with an `establish_relationships` tool. System prompt (`EXTRACT_RELATIONS_PROMPT` in `graphs/utils.py`) instructs the LLM to: (1) only extract explicitly stated info, (2) establish relationships among provided entities, (3) map self-references to user_id, (4) use consistent/timeless relationship types (prefer "professor" over "became_professor"). Supports a `custom_prompt` config option for domain-specific extraction rules.
+
+**Delete detection (`graph_memory.py:_get_delete_entities_from_search_output`)** — A third LLM call determines which existing relationships should be deleted given new information. The `DELETE_RELATIONS_SYSTEM_PROMPT` is careful about not deleting relationships that could coexist (e.g., "likes pizza" shouldn't be deleted when "also likes burgers" is learned). Only truly contradictory or outdated relationships get deleted.
+
+**Node dedup via embedding similarity** — When adding entities, Mem0 embeds the entity name and searches for existing nodes with `vector.similarity.cosine >= threshold` (default 0.7). If found, the existing node is reused (its `mentions` count incremented). If not, a new node is created. This is simpler than Graphiti's LLM-based dedup but works well for entity names.
+
+#### What Mem0 does well
+
+- **Three LLM calls for add** (extract entities → extract relationships → detect deletions) is a good balance between single-prompt and Graphiti's 6-step pipeline.
+- **Embedding-based node dedup** handles variations in naming without an extra LLM call.
+- **The `mentions` counter** is a lightweight signal for entity importance. We can adopt this alongside our confidence model.
+- **Delete detection as a separate step** prevents the LLM from being confused by trying to do extraction and conflict resolution simultaneously.
+- **Custom prompt injection** (`CUSTOM_PROMPT` placeholder) lets users add domain-specific extraction rules without forking the system.
+
+#### What Mem0 doesn't do
+
+- **No temporal model** — Entities exist or don't. No `valid_at` / `invalid_at` / `expired_at`. Old facts and new facts have equal weight.
+- **No fact embeddings on edges** — Only nodes have embeddings. Relationships are matched by BM25 on string triples, not semantically.
+- **No memory tiers** — Everything is in one flat graph. No core/working/archival distinction.
+- **No coding-specific entity types** — Designed for general-purpose personal assistant memory.
+- **No proactive surfacing** — Reactive retrieval only.
+- **No scope model** — User-level isolation via `user_id` filter on nodes, but no global/project/session scoping.
+- **No pre-compaction hooks** — Mem0 is a library, not an IDE plugin, so it has no concept of context window management.
 
 ---
 
@@ -275,16 +360,22 @@ Kuzu was our first choice for local mode — an embedded graph DB that speaks Cy
 6. **LangChain integration** — `@falkordb/langchain-ts` package exists for LLM-graph integration patterns.
 7. **Remote mode is just a config change** — `FalkorDB.connect({ socket: { host: "nas.local", port: 6379 } })`. No data model changes, no query rewrites. Start local, move to centralized later.
 
+### Known limitations
+
+- **Maps cannot be stored as property values** — FalkorDB does not support `MAP` types as node/edge properties. All `attributes` fields must be stored as JSON strings and parsed in the application layer. The `json.fromJsonMap()` / `json.toJson()` UDFs are available in Cypher for inline conversions, but storing is still string-based.
+- **Unique constraints require range indexes first** — `GRAPH.CONSTRAINT CREATE` requires an existing range index on the property. Constraints are created asynchronously via the Redis command interface.
+- **Unique constraints don't work on array-valued properties** — Our `labels` field (a string array) cannot have a uniqueness constraint. Dedup must be application-side.
+
 ### Connection examples
 
 ```ts
-// Local mode
+// Local embedded mode (falkordblite)
 import { FalkorDB } from "falkordblite";
-const db = await FalkorDB.connect({
-  persistenceFilePath: "~/.opencode/memory/local.rdb",
+const db = await FalkorDB.open({
+  path: "~/.opencode/memory/data", // directory, not file
 });
 
-// Remote mode
+// Remote server mode (falkordb)
 import { FalkorDB } from "falkordb";
 const db = await FalkorDB.connect({
   socket: { host: "nas.local", port: 6379 },
@@ -299,6 +390,29 @@ await graph.query(`
   RETURN l.name, t.name
 `);
 ```
+
+**Note:** The local mode uses `FalkorDB.open({ path })` (not `.connect()`). The `path` parameter is a **directory** where FalkorDB stores its data files, not a single file path. Persistence happens via periodic RDB snapshots, similar to Redis.
+
+---
+
+## Extraction approach comparison
+
+A key design decision is how to extract structured knowledge from conversations. The three systems we analyzed deeply take very different approaches.
+
+| Aspect                       | OpenClaw                         | Mem0                                        | Graphiti                                                          | Ours (v1)                                      |
+| ---------------------------- | -------------------------------- | ------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------- |
+| **Extraction target**        | Raw text chunks                  | Flat fact strings                           | Structured entities + typed edges                                 | Typed entities + typed edges                   |
+| **LLM calls per extraction** | 0 (no extraction)                | 3 (entities → relationships → deletions)    | 6+ (entities → classify → edges → attributes → summaries → dedup) | 1 (single combined prompt)                     |
+| **Entity types**             | None                             | LLM-inferred, unstructured                  | Ontology-defined, Pydantic models                                 | 10 fixed labels with extensible attributes     |
+| **Dedup strategy**           | Hash-based (file content)        | Embedding cosine similarity (0.7 threshold) | LLM-based ("is this the same real-world thing?")                  | Embedding similarity + name/type matching      |
+| **Temporal parsing**         | File dates only                  | None                                        | LLM extracts `valid_at`/`invalid_at` from text                    | LLM extracts `valid_at`/`invalid_at` from text |
+| **Conflict resolution**      | Last-write-wins (file overwrite) | LLM decides ADD/UPDATE/DELETE/NONE          | LLM-based edge invalidation                                       | LLM `update` action with field-level merge     |
+| **Custom domain rules**      | None                             | `custom_prompt` injection                   | Custom extraction instructions                                    | Ontology-aware prompting                       |
+| **Latency**                  | ~0ms (no extraction)             | ~3-5s (3 LLM calls)                         | ~10-20s (6+ LLM calls)                                            | ~1-2s (1 LLM call)                             |
+
+**Our v1 choice — single prompt** — is deliberate. Coding conversations are more structured than general chat (users state decisions explicitly, errors have stack traces, preferences are direct). This reduces ambiguity enough that a single well-crafted prompt can handle extraction, typing, and relationship creation together. If quality proves insufficient after real-world testing, we can split into Mem0's 3-step pattern without changing the graph schema.
+
+**The delete/conflict detection problem** is interesting. Mem0's approach of sending existing + new facts to the LLM and asking "what changed?" is elegant. Graphiti invalidates edges via temporal fields. We should adopt Mem0's pattern for our `update` action — send existing entities alongside the conversation so the LLM can emit updates rather than duplicate creates.
 
 ---
 
