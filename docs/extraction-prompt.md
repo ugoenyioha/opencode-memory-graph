@@ -49,8 +49,12 @@ Timestamp: {{timestamp}}
 Extract entities and relationships from the conversation above. Return valid JSON
 matching the schema below. Follow these rules:
 
-1. **Entity types** — use one of: Project, Decision, Lesson, Pattern, Preference,
-   Component, Error, Task, Tool, Concept
+1. **Entity types** — use one of the types listed below. Core types are always
+   available. Domain-specific types depend on the active packs.
+
+   Core: Decision, Lesson, Preference, Task, Concept
+
+   {{pack_labels}}
 
 2. **Deduplication** — if an entity matches one in "Existing entities" (same name
    and type, or clearly the same real-world concept), emit an `update` instead
@@ -155,6 +159,22 @@ Return ONLY the JSON object. No explanation, no markdown fencing.
 ---
 
 ## Design notes
+
+### Pack-aware prompt assembly
+
+The extraction prompt is assembled dynamically from the active domain packs. The `{{pack_labels}}` variable is populated with label names, descriptions, and examples from each active pack. For example, with `["coding", "ops"]` active:
+
+```
+Core: Decision, Lesson, Preference, Task, Concept
+
+Coding: Project (repository identity), Pattern (coding conventions),
+Component (files, modules), Error (errors and resolutions), Tool (technologies)
+
+Ops: Service (external systems), Endpoint (API endpoints and quirks),
+Procedure (multi-step workflows), Schema (API formats), Credential (credential types)
+```
+
+Each pack also contributes a short extraction hint paragraph that tells the LLM what to look for in that domain. These are appended to the system prompt.
 
 ### Why a single prompt (not multi-step)
 

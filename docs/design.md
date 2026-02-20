@@ -6,9 +6,11 @@ Architecture and technical decisions for the opencode-memory-graph plugin.
 
 ## Overview
 
-An OpenCode plugin that gives AI coding assistants persistent, structured memory using a temporal knowledge graph. Built on FalkorDB (Cypher) with two deployment modes: embedded local and remote server.
+A plugin that gives AI agents persistent, structured memory using a temporal knowledge graph. Built on FalkorDB (Cypher) with two deployment modes: embedded local and remote server.
 
-The plugin hooks into OpenCode's session lifecycle to automatically extract and store knowledge, and exposes tools for the LLM to search and retrieve memories.
+The memory graph is domain-agnostic at its core. A pluggable ontology system lets different use cases register their own entity types: coding agents track Components and Patterns, ops/IGA agents track Services and Endpoints, general agents track People and Resources. The core (Decisions, Lessons, Preferences, Tasks, Concepts) works identically across all domains.
+
+The plugin hooks into the host's session lifecycle to automatically extract and store knowledge, and exposes tools for the LLM to search and retrieve memories.
 
 ---
 
@@ -23,8 +25,8 @@ Uses `falkordblite` (npm package). Starts an embedded Redis server with the Falk
 ```ts
 import { FalkorDB } from "falkordblite";
 
-const db = await FalkorDB.connect({
-  persistenceFilePath: "~/.opencode/memory/local.rdb",
+const db = await FalkorDB.open({
+  path: "~/.opencode/memory/data", // directory, not file
 });
 ```
 
@@ -130,10 +132,12 @@ Inspired by MemGPT/Letta's hierarchical memory architecture. Not all memories ar
 
 Contents:
 
-- Project identity and goals (`Project` entity)
-- Coding patterns and conventions (`Pattern` entities)
-- User preferences (`Preference` entities)
-- Active high-severity lessons (`Lesson` entities with severity: "blocker")
+- User preferences (`Preference` entities) — core
+- Active high-severity lessons (`Lesson` entities with severity: "blocker") — core
+- Project identity and goals (`Project` entity) — coding pack
+- Coding patterns and conventions (`Pattern` entities) — coding pack
+- Agent behavioral directives (`Directive` entities) — general pack
+- Critical endpoint details (`Endpoint` entities) — ops pack
 
 Budget: ~2000 tokens. Kept lean to avoid eating context window.
 
@@ -204,13 +208,15 @@ On each `message.create` hook, the plugin queues the message for async processin
 2. The LLM returns structured JSON: entities found, relationships between them, and any updates to existing entities
 3. The plugin merges these into the graph (deduplicating by name + type, updating summaries, adding new edges)
 
-The extraction prompt is tuned for coding contexts. It knows to look for:
+The extraction prompt is assembled dynamically from the active domain packs. Core labels (Decision, Lesson, Preference, Task, Concept) are always present. Each active pack contributes additional labels, examples, and extraction hints. For instance, with the `coding` + `ops` packs active, the prompt knows to look for:
 
-- Decisions being made and their rationale
-- Technologies being chosen or rejected
-- Errors encountered and how they were resolved
-- Patterns being established or violated
-- Lessons learned from failures or dead ends
+- Decisions being made and their rationale (core)
+- Lessons learned from failures or dead ends (core)
+- Technologies being chosen or rejected (coding pack)
+- Errors encountered and how they were resolved (coding pack)
+- Service endpoints and their quirks (ops pack)
+- Multi-step operational procedures (ops pack)
+- API schema differences between versions (ops pack)
 
 ### Deduplication
 
@@ -236,6 +242,32 @@ These are injected into the system prompt alongside the core-tier entities. They
 - When to explicitly log information (after making a decision, after resolving an error, after discovering a gotcha)
 - How to interpret memory results (understanding confidence levels, temporal validity, lesson severity)
 - The sync routine (explicitly flush memories on user command, similar to ConPort's "Sync ConPort")
+
+---
+
+## Pluggable ontology
+
+The memory graph is not tied to a single domain. The ontology is split into core labels (always present) and domain packs (registered at init). See `docs/ontology.md` for the full schema.
+
+### Why pluggable
+
+The original design assumed coding agents only. But the same memory architecture — temporal knowledge graph, proactive lessons, memory tiers — applies to:
+
+- **General-purpose agents** — browsing, research, file management, conversations. Need to remember people, places, resources, and behavioral directives.
+- **Ops/IGA agents** — provisioning access across identity systems (MidPoint, WSO2, SpiceDB, Teleport). Need to remember service endpoints, API quirks, multi-step procedures, and schema differences between versions.
+- **Any future domain** — customer support (remember customer history, escalation patterns), research (remember papers, findings, hypotheses), etc.
+
+The core insight: Decisions, Lessons, Preferences, Tasks, and Concepts are universal. Only the "things" being decided about, learned about, or worked on change between domains.
+
+### How it works
+
+1. **Plugin config specifies active packs** — `{ packs: ["coding", "ops"] }`
+2. **Extraction prompt is assembled** from core + active pack labels, examples, and hints
+3. **Validation rules** from active packs run during periodic entity validation
+4. **Relationship vocabulary** is the union of core + active pack relationships
+5. **Custom packs** can be defined inline in config for niche domains
+
+Packs are additive. Activating `["coding", "ops"]` gives you all labels from both. There are no conflicts because labels are just strings in the `label_type` field.
 
 ---
 
