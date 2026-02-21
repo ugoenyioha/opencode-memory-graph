@@ -36,7 +36,7 @@ export type RegisterInput = {
 
 export interface TruthLog {
   createContext(input?: { at?: number }): Context;
-  forkContext(input: { from_context_id: number; at?: number }): Context;
+  forkContext(input: { from_turn_id: number; at?: number }): Context;
   contexts(input?: { limit?: number }): Context[];
   append(input: AppendInput): Turn;
   turns(context_id: number, input?: { after?: number; limit?: number }): Turn[];

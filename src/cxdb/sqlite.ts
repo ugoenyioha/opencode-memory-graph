@@ -200,6 +200,12 @@ export class SqliteLog implements TruthLog {
         created_at INTEGER NOT NULL,
         PRIMARY KEY (type_id, type_version)
       );
+
+      CREATE TABLE IF NOT EXISTS cxdb_bundle (
+        bundle_id TEXT PRIMARY KEY,
+        payload BLOB NOT NULL,
+        created_at INTEGER NOT NULL
+      );
     `);
   }
 
@@ -221,16 +227,30 @@ export class SqliteLog implements TruthLog {
     );
   }
 
-  forkContext(input: { from_context_id: number; at?: number }) {
-    const source = context(
-      this.db
-        .query(`SELECT * FROM cxdb_context WHERE context_id = $context_id`)
-        .get({ context_id: input.from_context_id }) as Record<
-        string,
-        unknown
-      > | null,
-    );
+  forkContext(input: { from_turn_id: number; at?: number }) {
     const at = input.at ?? now();
+    if (input.from_turn_id === 0) {
+      const run = this.db
+        .query(
+          `INSERT INTO cxdb_context (parent_context_id, head_turn_id, watermark, created_at)
+           VALUES (NULL, NULL, 0, $created_at)`,
+        )
+        .run({ created_at: at });
+      return context(
+        this.db
+          .query(`SELECT * FROM cxdb_context WHERE context_id = $context_id`)
+          .get({ context_id: Number(run.lastInsertRowid) }) as Record<
+          string,
+          unknown
+        > | null,
+      );
+    }
+
+    const source = turn(
+      this.db
+        .query(`SELECT * FROM cxdb_turn WHERE turn_id = $turn_id`)
+        .get({ turn_id: input.from_turn_id }) as Record<string, unknown> | null,
+    );
     const run = this.db
       .query(
         `INSERT INTO cxdb_context (parent_context_id, head_turn_id, watermark, created_at)
@@ -238,8 +258,8 @@ export class SqliteLog implements TruthLog {
       )
       .run({
         parent_context_id: source.context_id,
-        head_turn_id: source.head_turn_id,
-        watermark: source.watermark,
+        head_turn_id: source.turn_id,
+        watermark: source.idx,
         created_at: at,
       });
     return context(
@@ -483,6 +503,55 @@ export class SqliteLog implements TruthLog {
     }
     if (row.descriptor && same(row.descriptor, descriptor)) return;
     throw new Error("registry descriptor conflict");
+  }
+
+  bundle(bundle_id: string) {
+    const row = this.db
+      .query(`SELECT payload FROM cxdb_bundle WHERE bundle_id = $bundle_id`)
+      .get({ bundle_id }) as { payload?: Uint8Array } | null;
+    if (!row?.payload) return null;
+    return decodeSafe(row.payload);
+  }
+
+  putBundle(bundle_id: string, payload: unknown) {
+    const bytes = encode(payload);
+    const row = this.db
+      .query(`SELECT payload FROM cxdb_bundle WHERE bundle_id = $bundle_id`)
+      .get({ bundle_id }) as { payload?: Uint8Array } | null;
+    if (row?.payload && same(row.payload, bytes)) return "unchanged" as const;
+    if (row?.payload) throw new Error("registry bundle conflict");
+    this.db
+      .query(
+        `INSERT INTO cxdb_bundle (bundle_id, payload, created_at)
+         VALUES ($bundle_id, $payload, $created_at)`,
+      )
+      .run({ bundle_id, payload: bytes, created_at: now() });
+    return "created" as const;
+  }
+
+  types() {
+    return this.db
+      .query(
+        `SELECT type_id, type_version, descriptor
+         FROM cxdb_registry
+         ORDER BY type_id ASC, type_version ASC`,
+      )
+      .all() as {
+      type_id: string;
+      type_version: number;
+      descriptor: Uint8Array;
+    }[];
+  }
+
+  descriptor(type_id: string, type_version: number) {
+    const row = this.db
+      .query(
+        `SELECT descriptor FROM cxdb_registry
+         WHERE type_id = $type_id AND type_version = $type_version`,
+      )
+      .get({ type_id, type_version }) as { descriptor?: Uint8Array } | null;
+    if (!row?.descriptor) return null;
+    return decodeSafe(row.descriptor);
   }
 
   head(context_id: number) {

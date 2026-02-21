@@ -67,7 +67,8 @@ export class SessionStore {
     to_session_id: string,
   ) {
     const source = this.ensure(log, project_id, from_session_id);
-    const out = log.forkContext({ from_context_id: source });
+    const head = log.head(source);
+    const out = log.forkContext({ from_turn_id: head ?? 0 });
     this.set(project_id, to_session_id, out.context_id);
     return out.context_id;
   }

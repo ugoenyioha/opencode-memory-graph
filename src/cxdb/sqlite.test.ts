@@ -47,10 +47,10 @@ describe("cxdb sqlite unit", () => {
     });
     log.setWatermark(base.context_id, 7);
 
-    const next = log.forkContext({ from_context_id: base.context_id, at: 12 });
+    const next = log.forkContext({ from_turn_id: t.turn_id, at: 12 });
     expect(next.parent_context_id).toBe(base.context_id);
     expect(next.head_turn_id).toBe(t.turn_id);
-    expect(next.watermark).toBe(7);
+    expect(next.watermark).toBe(0);
     log.close();
   });
 

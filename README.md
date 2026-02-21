@@ -17,11 +17,11 @@ The plugin now includes a local truth log and a CXDB-compatible runtime API.
 
 ### CXDB feature parity snapshot
 
-- **Branch-from-any-turn:** partially supported. We support context forking and branchable session context; explicit fork-from-arbitrary-turn APIs can be extended further.
+- **Branch-from-any-turn:** supported via turn-level forking (`base_turn_id`) and context lineage tracking.
 - **Fast append:** supported via append-only SQLite turns with idempotency and integrity constraints.
 - **Content deduplication:** supported via BLAKE3 payload hashing in CAS storage.
 - **Type-safe projections:** supported via type registry + projection APIs.
-- **Built-in UI:** partially supported. We provide a local inspection viewer and CXDB-compatible API surface, not the full upstream CXDB UI stack.
+- **Built-in UI:** supported via the upstream CXDB React frontend served from static export.
 
 ## Why this is useful
 
@@ -122,6 +122,7 @@ export MEMORY_GRAPH_TRUTHLOG_PATH="$HOME/.opencode/memory/truthlog.sqlite"
 4. Optional: run the CXDB-compatible local server:
 
 ```bash
+bun run build:frontend
 bun run serve:cxdb
 ```
 
@@ -149,6 +150,7 @@ bun run serve:cxdb
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
 | [CXDB Phase 1](docs/cxdb-phase1.md)                                | SQLite truth log foundation, adversarial gate blockers/fixes, and acceptance     |
 | [CXDB Phases 2-7](docs/cxdb-phases-2-7.md)                         | Journal integration, replay/rebuild/integrity, API/visualization, and E2E gates  |
+| [CXDB Phase 8](docs/cxdb-phase8.md)                                | Turn-level fork parity, SSE/API expansion, and upstream frontend adoption        |
 | [Usage](docs/usage.md)                                             | Setup, config, local/remote behavior, troubleshooting                            |
 | [Orbstack E2E](docs/e2e-opencode-orbstack.md)                      | Repeatable bring-up, verification, and teardown workflow                         |
 | [Plan Conformance](docs/plan-conformance.md)                       | Roadmap-phase and deferred-item audit against implementation                     |
