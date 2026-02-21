@@ -1,10 +1,15 @@
 import path from "node:path";
 import { sqlite } from "./sqlite";
+import { openapi } from "./openapi";
+import type { GraphClient } from "../graph/client";
+import { search } from "../search/hybrid";
 
 type ServerInput = {
   path: string;
   port?: number;
   frontend?: string;
+  graph?: GraphClient;
+  project_id?: string;
 };
 
 type StoreEvent = {
@@ -40,6 +45,33 @@ function home(value: string) {
 
 function iso(ms: number) {
   return new Date(ms).toISOString();
+}
+
+function int(value: string | null, fallback: number) {
+  const parsed = Number(value ?? String(fallback));
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.floor(parsed);
+}
+
+function u64(value: string | null) {
+  if (value === null || value.trim() === "") return null;
+  const parsed = Number(value ?? "");
+  if (!Number.isFinite(parsed)) return null;
+  if (parsed < 0) return null;
+  if (!Number.isInteger(parsed)) return null;
+  return parsed;
+}
+
+function safeData(value: unknown) {
+  if (value === undefined) return null;
+  return value;
+}
+
+function parseScope(value: unknown) {
+  if (value === "global") return "global" as const;
+  if (value === "project") return "project" as const;
+  if (value === "session") return "session" as const;
+  return undefined;
 }
 
 class Events {
@@ -196,6 +228,29 @@ function decodeTurn(
   return { ...base, data };
 }
 
+function exportLine(
+  log: ReturnType<typeof sqlite>,
+  item: ReturnType<typeof log.turns>[number],
+) {
+  return {
+    turn_id: String(item.turn_id),
+    parent_turn_id:
+      item.parent_turn_id === null ? "0" : String(item.parent_turn_id),
+    idx: item.idx,
+    at: item.at,
+    type_id: item.type_id,
+    type_version: item.type_version,
+    payload_hash: item.payload_hash,
+    idempotency_key: item.idempotency_key,
+    payload: safeData(
+      log.project(item.payload_hash, item.type_id, item.type_version),
+    ),
+    metadata: {
+      context_id: String(item.context_id),
+    },
+  };
+}
+
 async function staticFile(root: string, url: URL) {
   const clean = decodeURIComponent(url.pathname);
   const rel = clean === "/" ? "/index.html" : clean;
@@ -215,6 +270,8 @@ export function serveCxdb(input: ServerInput) {
   const ui = home(
     input.frontend ?? path.join(process.cwd(), "frontend", "out"),
   );
+  const version = "phase9-cxdb";
+  const project_id = input.project_id ?? "default";
 
   return Bun.serve({
     port,
@@ -225,9 +282,13 @@ export function serveCxdb(input: ServerInput) {
       if (pathname === "/health" || pathname === "/healthz") {
         return json({
           status: "ok",
-          version: "phase8-cxdb",
+          version,
           uptime_seconds: 0,
         });
+      }
+
+      if (request.method === "GET" && pathname === "/v1/schema") {
+        return json(openapi(version));
       }
 
       if (request.method === "GET" && pathname === "/v1/events") {
@@ -339,6 +400,141 @@ export function serveCxdb(input: ServerInput) {
           total_count: list.length,
           elapsed_ms: Date.now() - start,
           query: q,
+        });
+      }
+
+      if (request.method === "GET" && pathname === "/v1/export") {
+        const context_id = u64(url.searchParams.get("context_id"));
+        if (context_id === null) {
+          return error(
+            400,
+            "BAD_REQUEST",
+            "context_id query parameter is required",
+          );
+        }
+        const ctx = contextById(log, context_id);
+        if (!ctx) return error(404, "NOT_FOUND", "Context not found");
+        const rows = chain(log, ctx.head_turn_id);
+        const body = rows
+          .map((item) => JSON.stringify(exportLine(log, item)))
+          .join("\n");
+        return new Response(body.length > 0 ? `${body}\n` : "", {
+          headers: {
+            "content-type": "application/x-ndjson",
+            "content-disposition": `attachment; filename=context-${context_id}.jsonl`,
+          },
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/v1/import") {
+        const value = u64(url.searchParams.get("context_id"));
+        if (value !== null && !contextById(log, value)) {
+          return error(404, "NOT_FOUND", "Context not found");
+        }
+        const context_id = value ?? log.createContext().context_id;
+        const raw = await request.text();
+        if (!raw.trim()) {
+          return json({
+            context_id: String(context_id),
+            turns_imported: 0,
+            head_turn_id: String(log.head(context_id) ?? 0),
+            errors: [],
+          });
+        }
+
+        const lines = raw
+          .split("\n")
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0);
+        const errors: { line: number; message: string }[] = [];
+        let imported = 0;
+        for (const [idx, line] of lines.entries()) {
+          let item: Record<string, unknown>;
+          try {
+            item = JSON.parse(line) as Record<string, unknown>;
+          } catch {
+            errors.push({ line: idx + 1, message: "invalid json" });
+            continue;
+          }
+
+          const type_id = item.type_id;
+          const type_version = Number(item.type_version ?? 0);
+          if (typeof type_id !== "string" || !type_id) {
+            errors.push({ line: idx + 1, message: "missing type_id" });
+            continue;
+          }
+          if (!Number.isInteger(type_version) || type_version <= 0) {
+            errors.push({ line: idx + 1, message: "invalid type_version" });
+            continue;
+          }
+
+          const payload = item.payload ?? item.data;
+          try {
+            log.append({
+              context_id,
+              type_id,
+              type_version,
+              payload,
+              idempotency_key:
+                typeof item.idempotency_key === "string"
+                  ? item.idempotency_key
+                  : undefined,
+            });
+            imported += 1;
+          } catch (cause) {
+            errors.push({ line: idx + 1, message: String(cause) });
+          }
+        }
+
+        const head = contextById(log, context_id)?.head_turn_id ?? 0;
+        return json({
+          context_id: String(context_id),
+          turns_imported: imported,
+          head_turn_id: String(head),
+          errors,
+        });
+      }
+
+      if (request.method === "POST" && pathname === "/v1/search") {
+        if (!input.graph) {
+          return error(
+            501,
+            "NOT_IMPLEMENTED",
+            "search backend unavailable; start server with graph client",
+          );
+        }
+        const start = Date.now();
+        const body = ((await request.json().catch(() => ({}))) ?? {}) as {
+          query?: string;
+          type?: string;
+          scope?: string;
+          after?: number;
+          before?: number;
+          limit?: number;
+          project_id?: string;
+        };
+        if (!body.query?.trim()) {
+          return error(400, "BAD_REQUEST", "query is required");
+        }
+        const list = await search(input.graph, {
+          query: body.query,
+          scope: parseScope(body.scope),
+          limit: int(body.limit === undefined ? null : String(body.limit), 10),
+          project_id: body.project_id ?? project_id,
+        });
+        const filtered = list.filter((item) => {
+          if (body.type && item.type !== body.type) return false;
+          if (body.after !== undefined && (item.created_at ?? 0) < body.after)
+            return false;
+          if (body.before !== undefined && (item.created_at ?? 0) > body.before)
+            return false;
+          return true;
+        });
+        return json({
+          query: body.query,
+          count: filtered.length,
+          elapsed_ms: Date.now() - start,
+          results: filtered,
         });
       }
 
