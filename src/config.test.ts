@@ -9,6 +9,8 @@ describe("security baseline config", () => {
     expect(out.default_scope).toBe("project");
     expect(out.packs).toEqual(["coding"]);
     expect(out.proactive.enabled).toBe(false);
+    expect(out.truthlog.enabled).toBe(false);
+    expect(out.truthlog.path).toBe("~/.opencode/memory/truthlog.sqlite");
   });
 
   test("rejects insecure remote mode without tls", () => {
@@ -119,6 +121,18 @@ describe("security baseline config", () => {
     delete process.env.MEMORY_GRAPH_PROACTIVE;
     const off = runtime();
     expect(off.proactive.enabled).toBe(false);
+  });
+
+  test("runtime helper configures truthlog from env", () => {
+    process.env.MEMORY_GRAPH_TRUTHLOG = "1";
+    process.env.MEMORY_GRAPH_TRUTHLOG_PATH = "/tmp/truthlog.sqlite";
+
+    const out = runtime();
+    expect(out.truthlog.enabled).toBe(true);
+    expect(out.truthlog.path).toBe("/tmp/truthlog.sqlite");
+
+    delete process.env.MEMORY_GRAPH_TRUTHLOG;
+    delete process.env.MEMORY_GRAPH_TRUTHLOG_PATH;
   });
 
   test("runtime helper parses cloud embedding mode", () => {

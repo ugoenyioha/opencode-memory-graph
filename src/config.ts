@@ -49,6 +49,15 @@ const proactive = z
     enabled: z.boolean().default(false),
   })
   .default({ enabled: false });
+const truthlog = z
+  .object({
+    enabled: z.boolean().default(false),
+    path: z.string().min(1).default("~/.opencode/memory/truthlog.sqlite"),
+  })
+  .default({
+    enabled: false,
+    path: "~/.opencode/memory/truthlog.sqlite",
+  });
 
 export const ConfigSchema = z.object({
   storage: z
@@ -58,6 +67,7 @@ export const ConfigSchema = z.object({
   default_scope: scope,
   packs,
   proactive,
+  truthlog,
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -94,10 +104,17 @@ export function runtime(): Config {
   const proactive = {
     enabled: process.env.MEMORY_GRAPH_PROACTIVE === "1",
   };
+  const truthlog = {
+    enabled: process.env.MEMORY_GRAPH_TRUTHLOG === "1",
+    path:
+      process.env.MEMORY_GRAPH_TRUTHLOG_PATH ??
+      "~/.opencode/memory/truthlog.sqlite",
+  };
   return config({
     storage,
     embeddings,
     default_scope: "project",
     proactive,
+    truthlog,
   });
 }

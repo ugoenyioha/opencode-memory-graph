@@ -1,4 +1,6 @@
 import type { GraphClient } from "../graph/client";
+import type { TruthLog } from "../cxdb/interface";
+import { compactionSnapshot } from "../cxdb/journal";
 import { merge } from "../extraction";
 
 const MIN_MESSAGES = 3;
@@ -67,6 +69,10 @@ export async function precompact(
     packs: Array<
       string | { name: string; labels: { name: string; description: string }[] }
     >;
+    truthlog?: {
+      log: TruthLog;
+      context_id: number;
+    };
   },
 ) {
   const result = await client.session.messages({
@@ -82,6 +88,14 @@ export async function precompact(
 
   const last = result.data[result.data.length - 1]?.info.id ?? "none";
   const key = `compact:${input.sessionID}:${last}`;
+
+  if (input.truthlog) {
+    compactionSnapshot(input.truthlog, {
+      session_id: input.sessionID,
+      last_message_id: last,
+      summary,
+    });
+  }
 
   await merge(
     db,
@@ -109,6 +123,7 @@ export async function precompact(
       project_id: input.directory,
       mutation_key: key,
       packs: input.packs,
+      truthlog: input.truthlog,
     },
   );
 

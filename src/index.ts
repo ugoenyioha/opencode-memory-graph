@@ -1,6 +1,10 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { runtime } from "./config";
+import { sqlite } from "./cxdb/sqlite";
+import { sessions } from "./cxdb/session";
 import { connect } from "./graph/client";
 import { schema } from "./graph/schema";
 import { precompact } from "./plugin/compaction";
@@ -10,6 +14,12 @@ import { cap, core, format, working } from "./plugin/tiers";
 import { record, toolName } from "./plugin/usage";
 import { search } from "./search/hybrid";
 import { neutralize, redact, sanitize } from "./security/redact";
+
+function home(value: string) {
+  if (!value.startsWith("~/")) return value;
+  const base = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  return `${base}/${value.slice(2)}`;
+}
 
 export const MemoryPlugin: Plugin = async (ctx) => {
   const projectID = ctx.directory;
@@ -24,6 +34,17 @@ export const MemoryPlugin: Plugin = async (ctx) => {
 
   const db = await connect(cfg.storage);
   await schema(db);
+
+  if (cfg.truthlog.enabled) {
+    await mkdir(path.dirname(home(cfg.truthlog.path)), { recursive: true });
+  }
+
+  const truthlog = cfg.truthlog.enabled
+    ? sqlite(home(cfg.truthlog.path))
+    : null;
+  const sessionStore = cfg.truthlog.enabled
+    ? sessions(`${home(cfg.truthlog.path)}.sessions.sqlite`)
+    : null;
 
   return {
     // --- Tools: two-tool retrieval pattern ---
@@ -165,8 +186,13 @@ export const MemoryPlugin: Plugin = async (ctx) => {
         .trim();
       if (!text) return;
       const messageID = input.messageID ?? String(Date.now());
+      const contextID =
+        truthlog && sessionStore
+          ? sessionStore.ensure(truthlog, projectID, input.sessionID)
+          : undefined;
       await enqueue(db, {
         project_id: projectID,
+        context_id: contextID,
         session_id: input.sessionID,
         message_id: messageID,
         text: redact(text),
@@ -176,6 +202,7 @@ export const MemoryPlugin: Plugin = async (ctx) => {
         await drain(db, {
           project_id: projectID,
           packs: cfg.packs,
+          truthlog: truthlog ?? undefined,
           limit: 1,
         });
       }
@@ -194,6 +221,17 @@ export const MemoryPlugin: Plugin = async (ctx) => {
         sessionID: input.sessionID,
         directory: projectID,
         packs: cfg.packs,
+        truthlog:
+          truthlog && sessionStore
+            ? {
+                log: truthlog,
+                context_id: sessionStore.ensure(
+                  truthlog,
+                  projectID,
+                  input.sessionID,
+                ),
+              }
+            : undefined,
       });
       if (!ok) return;
       output.context.push(
@@ -212,6 +250,7 @@ export const MemoryPlugin: Plugin = async (ctx) => {
       await drain(db, {
         project_id: projectID,
         packs: cfg.packs,
+        truthlog: truthlog ?? undefined,
         limit: 3,
       });
     },

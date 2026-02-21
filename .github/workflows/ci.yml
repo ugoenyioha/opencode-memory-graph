@@ -16,6 +16,7 @@ jobs:
           bun-version: latest
       - run: bun install
       - run: bun run typecheck
+      - run: bun test src/cxdb/conformance.test.ts
       - run: bun test
 
   remote-validation:

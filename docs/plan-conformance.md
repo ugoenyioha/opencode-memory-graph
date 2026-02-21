@@ -60,6 +60,28 @@ These changes were intentional to prioritize safe MVP behavior and truthful oper
 1. Keep CI remote-validation variables/secrets current and rotate test credentials/certs.
 2. Add operator health signals and dead-letter handling for queue/usage runtime paths.
 
+## CXDB Phase 1 gate update
+
+Truth log Phase 1 (SQLite CXDB) completed and passed adversarial gate review.
+
+- Implementation and rationale: `docs/cxdb-phase1.md`
+- Code surface: `src/cxdb/interface.ts`, `src/cxdb/types.ts`, `src/cxdb/sqlite.ts`
+- Validation evidence: `src/cxdb/sqlite.test.ts`, `src/cxdb/conformance.test.ts`
+- Gate outcome: GO after required-now fixes (idempotency race safety, atomic watermark, strict append validation, safe decode behavior, registry immutability, schema-version gating).
+
+## CXDB Phases 2-7 gate update
+
+Truth log integration phases 2 through 7 are now complete and validated.
+
+- Delivery summary: `docs/cxdb-phases-2-7.md`
+- Journal integration: `src/cxdb/journal.ts`, `src/extraction/index.ts`, `src/plugin/queue.ts`, `src/plugin/compaction.ts`, `src/index.ts`
+- Replay/rebuild/integrity: `src/cxdb/replay.ts`, `src/cxdb/integrity.ts`, `scripts/rebuild-graph.ts`, `scripts/integrity-check.ts`
+- Session mapping: `src/cxdb/session.ts`
+- API + visualization: `src/cxdb/server.ts`, `scripts/cxdb-server.ts`
+- End-to-end validation: `src/cxdb/e2e.test.ts`
+
+Gate outcome: GO with passing phase-targeted checks and full-suite regression pass.
+
 ## Audit update policy
 
 When behavior or scope changes, update this file in the same change set as code/docs updates.

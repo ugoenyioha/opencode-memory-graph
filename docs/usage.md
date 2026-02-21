@@ -12,6 +12,8 @@ For a phase/deferred-item implementation audit with explicit plan changes, see `
 | Remote FalkorDB mode | Runtime-supported, hardening and E2E validation in progress |
 | Embedding search     | Local or cloud-provider chain with safe FTS fallback        |
 | Proactive warnings   | Runtime-wired (opt-in via `MEMORY_GRAPH_PROACTIVE=1`)       |
+| SQLite truth log     | Supported (opt-in via `MEMORY_GRAPH_TRUTHLOG=1`)            |
+| CXDB-compatible API  | Supported (`bun run serve:cxdb`)                            |
 
 ## Prerequisites
 
@@ -64,6 +66,14 @@ bun run build
 - `MEMORY_GRAPH_QUEUE_INTERVAL_MS` / `MEMORY_GRAPH_QUEUE_BATCH` / `MEMORY_GRAPH_PROJECT_ID`
   - Used by standalone worker mode (`bun run worker:queue`) to control poll interval, batch size, and project scope.
   - Failed queue items are retried with exponential backoff up to a capped attempt count.
+- `MEMORY_GRAPH_TRUTHLOG`
+  - `1` enables truthlog config path parsing in runtime config.
+- `MEMORY_GRAPH_TRUTHLOG_PATH`
+  - Path to SQLite truthlog file.
+  - Default: `~/.opencode/memory/truthlog.sqlite`.
+- `CXDB_HTTP_PORT`
+  - Optional port override for `bun run serve:cxdb`.
+  - Default: `9010`.
 
 ### Environment variables (test-only)
 
@@ -125,6 +135,22 @@ Optional worker mode for async queue draining:
 ```bash
 export MEMORY_GRAPH_QUEUE_MODE="async"
 bun run worker:queue
+```
+
+Truthlog operational commands:
+
+```bash
+export MEMORY_GRAPH_TRUTHLOG="1"
+export MEMORY_GRAPH_TRUTHLOG_PATH="$HOME/.opencode/memory/truthlog.sqlite"
+
+# Serve CXDB-compatible API + local viewer
+bun run serve:cxdb
+
+# Rebuild graph projection from truthlog
+bun run rebuild:graph
+
+# Integrity counters/checks
+bun run check:integrity
 ```
 
 ## Remote quickstart workflow (advanced)
@@ -238,7 +264,19 @@ If you need OpenCode remote-mode startup validation, use the TLS ingress manifes
 
 - Local mode is the only end-to-end tested integration path.
 - Remote mode relies on env-driven runtime config (`MEMORY_GRAPH_MODE`, host/port/password/tls) rather than host config file wiring.
-- Proactive warning and working-tier modules exist but are not connected to active runtime hooks yet.
+- Distinct-key high-contention appends are optimistic and may surface transient write conflicts under heavy parallelism.
+- CAS deduplication is byte-level over msgpack payloads (semantic JSON key-order equivalence is not guaranteed).
+
+## CXDB Phase 1 behavior notes
+
+- Append type policy is strict allowlist (`src/cxdb/types.ts` canonical mutation types).
+- Idempotency keys are strict identity keys:
+  - Same `(context_id, idempotency_key)` is accepted only when `{type_id, type_version, payload_hash}` is identical.
+  - Mismatch returns deterministic error: `idempotency key conflict`.
+- Registry descriptors are immutable per `(type_id, type_version)`.
+- `project()` returns `null` for malformed payload/descriptor bytes (safe decode behavior).
+
+See `docs/cxdb-phase1.md` and `docs/cxdb-phases-2-7.md` for caveats, migration notes, and gate evidence.
 
 ## Remote production hardening checklist
 

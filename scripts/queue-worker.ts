@@ -1,7 +1,14 @@
 import { runtime } from "../src/config";
 import { connect } from "../src/graph/client";
 import { schema } from "../src/graph/schema";
+import { sqlite } from "../src/cxdb/sqlite";
 import { drain } from "../src/plugin/queue";
+
+function home(value: string) {
+  if (!value.startsWith("~/")) return value;
+  const base = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  return `${base}/${value.slice(2)}`;
+}
 
 const projectID = process.env.MEMORY_GRAPH_PROJECT_ID ?? "default";
 const interval = process.env.MEMORY_GRAPH_QUEUE_INTERVAL_MS
@@ -21,6 +28,9 @@ async function run() {
   const cfg = runtime();
   const db = await connect(cfg.storage);
   await schema(db);
+  const truthlog = cfg.truthlog.enabled
+    ? sqlite(home(cfg.truthlog.path))
+    : null;
 
   let stop = false;
   const halt = () => {
@@ -33,6 +43,7 @@ async function run() {
     const done = await drain(db, {
       project_id: projectID,
       packs,
+      truthlog: truthlog ?? undefined,
       limit: batch,
     });
     if (done > 0) {
@@ -50,6 +61,7 @@ async function run() {
   }
 
   await db.close();
+  truthlog?.close();
 }
 
 run().catch((error) => {

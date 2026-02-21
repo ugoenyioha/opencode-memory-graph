@@ -10,6 +10,7 @@ import { entity as entityId, relation as relationId } from "../graph/ids";
 import { complete, reserve } from "../graph/mutation";
 import { registry } from "../ontology/registry";
 import { redact } from "../security/redact";
+import { extractionBatch, type JournalConfig } from "../cxdb/journal";
 import { extractionWithPacks } from "./schema";
 import { type Pack } from "../ontology/packs";
 
@@ -47,6 +48,8 @@ export async function merge(
     project_id?: string;
     trusted_global?: boolean;
     packs?: Array<string | Pack>;
+    truthlog?: JournalConfig;
+    from_truthlog?: boolean;
   },
 ): Promise<void> {
   const safe = extractionWithPacks(result, options?.packs ?? ["coding"]);
@@ -58,6 +61,20 @@ export async function merge(
     throw new Error("global writes require trusted_global=true");
   }
   const key = options?.mutation_key;
+
+  if (options?.truthlog && !options?.from_truthlog) {
+    extractionBatch(options.truthlog, {
+      result: safe,
+      options: {
+        mutation_key: key,
+        scope,
+        project_id: projectID,
+        trusted_global: allowGlobal,
+        packs: options?.packs,
+      },
+    });
+  }
+
   return serial(scope, async () => {
     const mutationScope = `${scope}:${projectID}`;
     if (key && !(await reserve(db, mutationScope, key))) return;

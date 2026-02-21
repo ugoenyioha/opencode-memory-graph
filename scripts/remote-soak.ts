@@ -24,10 +24,23 @@ async function run() {
   let reads = 0;
   let writes = 0;
   let errors = 0;
+  const writeDurations: number[] = [];
+  const readDurations: number[] = [];
+
+  const pct = (list: number[], value: number) => {
+    if (list.length === 0) return 0;
+    const sorted = [...list].sort((a, b) => a - b);
+    const idx = Math.min(
+      sorted.length - 1,
+      Math.floor((value / 100) * sorted.length),
+    );
+    return sorted[idx] ?? 0;
+  };
 
   while (Date.now() < deadline) {
     try {
       const now = Date.now();
+      const writeStart = Date.now();
       await db.query(
         `MERGE (e:Entity {uuid: $uuid})
          ON CREATE SET e.name = $name, e.summary = $summary, e.label_type = 'Concept',
@@ -42,11 +55,14 @@ async function run() {
         },
       );
       writes++;
+      writeDurations.push(Date.now() - writeStart);
 
+      const readStart = Date.now();
       await db.roQuery(
         `MATCH (e:Entity) WHERE e.project_id = 'soak' RETURN count(e) AS count`,
       );
       reads++;
+      readDurations.push(Date.now() - readStart);
     } catch {
       errors++;
     }
@@ -63,6 +79,10 @@ async function run() {
         reads,
         writes,
         errors,
+        write_p95_ms: pct(writeDurations, 95),
+        write_p99_ms: pct(writeDurations, 99),
+        read_p95_ms: pct(readDurations, 95),
+        read_p99_ms: pct(readDurations, 99),
       },
       null,
       2,

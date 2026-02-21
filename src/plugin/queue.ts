@@ -3,9 +3,11 @@ import { merge } from "../extraction";
 import { mutation } from "../graph/ids";
 import { serial } from "../graph/commit";
 import { type Pack } from "../ontology/packs";
+import type { TruthLog } from "../cxdb/interface";
 
 type Item = {
   key: string;
+  context_id?: number;
   session_id: string;
   message_id: string;
   text: string;
@@ -51,6 +53,7 @@ export async function enqueue(
   db: GraphClient,
   input: {
     project_id: string;
+    context_id?: number;
     session_id: string;
     message_id: string;
     text: string;
@@ -79,6 +82,7 @@ export async function enqueue(
       message_id: input.message_id,
       payload: JSON.stringify({
         key,
+        context_id: input.context_id,
         session_id: input.session_id,
         message_id: input.message_id,
         text: input.text,
@@ -94,6 +98,7 @@ export async function drain(
   input: {
     project_id: string;
     packs: Array<string | Pack>;
+    truthlog?: TruthLog;
     limit?: number;
   },
 ) {
@@ -145,6 +150,13 @@ export async function drain(
             project_id: input.project_id,
             mutation_key: payload.key,
             packs: input.packs,
+            truthlog:
+              input.truthlog && payload.context_id
+                ? {
+                    log: input.truthlog,
+                    context_id: payload.context_id,
+                  }
+                : undefined,
           },
         );
         await db.query(
