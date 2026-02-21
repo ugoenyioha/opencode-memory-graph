@@ -6,14 +6,14 @@ It stores memory in a knowledge graph backed by [FalkorDB](https://www.falkordb.
 
 ## New in CXDB phases 1-7
 
-The plugin now ships with a local-first truth layer and CXDB-compatible runtime surface.
+The plugin now includes a local truth log and a CXDB-compatible runtime API.
 
-- SQLite truth log with immutable turns (DAG lineage) and blob CAS semantics
-- journal-first write path where graph projection writes are backed by immutable turns
-- replay, rebuild, and integrity tooling to verify or reconstruct projections
-- session-to-context mapping to support branchable context boundaries
-- CXDB-compatible HTTP API plus a local visualization endpoint
-- end-to-end validation and conformance gates in CI-oriented workflows
+- Every memory write is saved to a local SQLite truth log as an immutable turn.
+- Graph writes now use a journal-first flow, so derived graph state is backed by truth-log history.
+- You can replay history, rebuild graph state, and run integrity checks after failures.
+- Session-to-context mapping keeps memory branchable per session instead of one shared thread.
+- A CXDB-compatible HTTP API is available, with a local viewer for quick inspection.
+- End-to-end and conformance tests are now part of the validation workflow.
 
 ## Why this is useful
 
