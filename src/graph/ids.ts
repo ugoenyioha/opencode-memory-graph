@@ -19,3 +19,7 @@ export function relation(source: string, name: string, target: string) {
 export function mutation(scope: string, key: string) {
   return `mut_${hash(`${norm(scope)}|${norm(key)}`)}`;
 }
+
+export function episode(sessionId: string, sequence: number) {
+  return `ep_${hash(`${norm(sessionId)}|${sequence}`)}`;
+}

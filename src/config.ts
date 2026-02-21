@@ -59,6 +59,14 @@ const truthlog = z
     path: "~/.opencode/memory/truthlog.sqlite",
   });
 
+const reranker = z
+  .object({
+    mode: z.enum(["off", "cohere", "voyage"]).default("off"),
+    model: z.string().optional(),
+    top_k: z.number().int().positive().default(20),
+  })
+  .default({ mode: "off", top_k: 20 });
+
 export const ConfigSchema = z.object({
   storage: z
     .union([local, remote])
@@ -68,6 +76,7 @@ export const ConfigSchema = z.object({
   packs,
   proactive,
   truthlog,
+  reranker,
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

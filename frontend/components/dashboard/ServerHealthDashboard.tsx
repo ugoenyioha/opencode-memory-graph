@@ -1,14 +1,19 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { RefreshCw, WifiOff } from '@/components/icons';
 import { cn } from '@/lib/utils';
-import { useMetrics, useRelativeTime } from '@/hooks';
+import { useMetrics, useRelativeTime, useQueueHealth } from '@/hooks';
 import { CapacityGauge } from './CapacityGauge';
 import { ObjectCountsCard } from './ObjectCountsCard';
 import { StorageUsageCard } from './StorageUsageCard';
 import { PerformanceCard } from './PerformanceCard';
 import { FilesystemCard } from './FilesystemCard';
 import { SessionsErrorsBar } from './SessionsErrorsBar';
+import { QueueHealthCard } from './QueueHealthCard';
+import { DeadLetterTable } from './DeadLetterTable';
+import { GraphStatsCard, type GraphStats } from './GraphStatsCard';
+import { EmbeddingCoverageBar } from './EmbeddingCoverageBar';
 
 export interface ServerHealthDashboardProps {
   enabled?: boolean;
@@ -47,6 +52,23 @@ export function ServerHealthDashboard({
     mockMode,
     interval: 5000,
   });
+
+  const queue = useQueueHealth({ enabled, interval: 5000 });
+
+  // Graph stats polling
+  const [graphStats, setGraphStats] = useState<GraphStats | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    const fetchGraph = async () => {
+      try {
+        const res = await fetch('/v1/graph/stats');
+        if (res.ok) setGraphStats(await res.json());
+      } catch { /* ignore */ }
+    };
+    fetchGraph();
+    const timer = setInterval(fetchGraph, 10000);
+    return () => clearInterval(timer);
+  }, [enabled]);
 
   // Staleness tracking
   const lastUpdated = useRelativeTime(lastFetchTime || 0);
@@ -147,6 +169,34 @@ export function ServerHealthDashboard({
         perf={data.perf}
         className="w-full"
       />
+
+      {/* Knowledge Graph + Embeddings */}
+      {graphStats && (
+        <div className="w-full grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+          <GraphStatsCard stats={graphStats} />
+          <EmbeddingCoverageBar
+            withEmbedding={graphStats.embeddings.with_embedding}
+            total={graphStats.embeddings.total}
+            coveragePct={graphStats.embeddings.coverage_pct}
+          />
+        </div>
+      )}
+
+      {/* Queue Health + Dead Letters */}
+      {queue.stats && (
+        <div className="w-full mt-4 space-y-4">
+          <QueueHealthCard stats={queue.stats} />
+          {queue.deadLetters && queue.deadLetters.total > 0 && (
+            <DeadLetterTable
+              items={queue.deadLetters.items}
+              total={queue.deadLetters.total}
+              onRetry={queue.retryItem}
+              onRetryAll={queue.retryAll}
+              onPurge={() => queue.purge()}
+            />
+          )}
+        </div>
+      )}
 
       {/* Last updated footer */}
       <div className="mt-4 text-xs text-theme-text-dim">

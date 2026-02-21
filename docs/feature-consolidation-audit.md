@@ -32,30 +32,36 @@ Legend: `Implemented`, `Partial`, `Missing`, `Out of Scope`
 | Temporal supersede/expiry lifecycle                               | Implemented | Missing     | Implemented  | Partial     | Partial      |
 | Protected lesson quarantine guards                                | Implemented | Missing     | Missing      | Missing     | Missing      |
 | Proactive warning surfacing                                       | Implemented | Missing     | Missing      | Missing     | Partial      |
-| Hybrid ranking (vector + traversal + decay + MMR + FTS expansion) | Implemented | Partial     | Implemented  | Partial     | Partial      |
+| Hybrid ranking (vector + traversal + decay + episodes + community + MMR + cross-encoder) | Implemented | Partial     | Implemented  | Partial     | Partial      |
 | Tiered context loading (core/working)                             | Implemented | Partial     | Partial      | Missing     | Implemented  |
 | Pre-compaction persistence hook                                   | Implemented | Implemented | Missing      | Missing     | Partial      |
 | CI-gated remote validation                                        | Implemented | Missing     | Partial      | Partial     | Partial      |
 
 ## What we missed (or only partially consolidated)
 
-These are the real gaps after comparing code and research outcomes.
+All gaps identified in the original audit have now been implemented:
 
-1. **Background extraction queue + worker controls** (`Partial`)
+1. **Background extraction queue + worker controls** (`Implemented`)
    - Queue-backed extraction, standalone worker mode, and retry backoff are implemented.
-   - Operator-facing dead-letter/health reporting remains minimal.
-2. **Episode/community retrieval dimensions** (`Missing`)
-   - Graphiti-style multi-dimensional retrieval (episodes/community clustering) is not present.
-3. **Cross-encoder reranking tier** (`Missing`)
-   - We have MMR and weighted signals, but not final-stage cross-encoder rerank.
-4. **Operator observability surfaces** (`Partial`)
-   - Strong tests and CI path exist, but no dedicated memory health/reporting dashboard output.
+   - Queue health reporting (stats endpoint, dashboard card) and dead-letter inspection/repair (retry, purge, table UI) are now complete.
+2. **Episode/community retrieval dimensions** (`Implemented`)
+   - Graphiti-style multi-dimensional retrieval is now present: Episode nodes created per-session during extraction with MENTIONS edges and NEXT chains; community detection via Label Propagation algorithm; both feed into the hybrid search pipeline as weighted dimensions (episode coherence: 0.15, community boost: 0.10).
+3. **Cross-encoder reranking tier** (`Implemented`)
+   - Provider-abstracted cross-encoder reranking (off/cohere/voyage modes) wired between score-sort and MMR in the search pipeline.
+4. **Operator observability surfaces** (`Implemented`)
+   - Rich observability dashboard with queue health card, dead-letter table, graph stats card, embedding coverage bar, and unified metrics endpoint.
 
 Implemented during this consolidation pass:
 
 - Queue-backed extraction path with hook-driven draining and idempotent replay safety.
 - `tool.execute.after` usage tracking (`ToolUsage`) and retrieval weighting input.
 - Optional standalone queue worker command (`bun run worker:queue`).
+- Queue health reporting (`GET /v1/queue/stats`) and dead-letter management endpoints.
+- Cross-encoder reranking module (`src/search/rerank.ts`) with provider abstraction.
+- Rich observability dashboard (queue health, dead letters, graph stats, embedding coverage, metrics endpoint).
+- Episode creation during extraction with MENTIONS/NEXT graph structures (`src/extraction/index.ts`).
+- Community detection via Label Propagation (`src/graph/community.ts`) with re-clustering during compaction.
+- Five-signal hybrid search pipeline: vector (0.40), graph traversal (0.25), episode coherence (0.15), community boost (0.10), temporal decay (0.10).
 
 ## Consolidation decisions
 
@@ -69,14 +75,14 @@ Implemented:
    - Messages enqueue first, then drain in hook-driven micro-batches with idempotent keys.
    - Standalone worker mode is available for independent draining.
 
-### Defer (valuable, but not required for current coding workflow quality)
+### Previously deferred, now implemented
 
-1. **Episode/community retrieval dimensions**
-   - Why defer: larger model/graph complexity; current node+edge traversal is already strong for coding use.
-2. **Cross-encoder reranking**
-   - Why defer: higher cost and operational complexity; current ranking passes functional goals.
-3. **Rich observability dashboard**
-   - Why defer: can be added after usage-learning loop to surface meaningful metrics.
+1. **Episode/community retrieval dimensions** — Implemented
+   - Episode nodes per-session, MENTIONS edges, NEXT chain, community detection via Label Propagation, both wired into hybrid search.
+2. **Cross-encoder reranking** — Implemented
+   - Provider-abstracted reranking (off/cohere/voyage) with configurable top_k.
+3. **Rich observability dashboard** — Implemented
+   - Queue health, dead letters, graph stats, embedding coverage, unified metrics endpoint.
 
 ### Reject (intentionally not adopting)
 
@@ -91,11 +97,13 @@ Implemented:
 
 - We did not miss core differentiators.
 - We successfully consolidated the highest-value ideas across products into a coherent coding-assistant memory design.
-- Remaining gaps are mostly second-order quality/operations features, not fundamental capability blockers.
+- All previously identified gaps have been addressed in this consolidation pass.
+- The hybrid search pipeline now has five weighted signals plus cross-encoder reranking and MMR diversity.
 
 ## Next checkpoint criteria
 
-Consolidation is complete for this phase. Next impact checkpoint:
+All consolidation items are complete. Next impact checkpoint:
 
-1. Add operator-visible queue/usage health reporting.
-2. Add dead-letter inspection/repair command for terminal queue failures.
+1. Monitor episode/community impact on retrieval quality in real coding sessions.
+2. Evaluate cross-encoder reranking latency impact when enabled with external providers.
+3. Consider adding community visualization to the CxDB frontend explorer.

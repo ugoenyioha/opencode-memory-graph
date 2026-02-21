@@ -3,6 +3,13 @@ import { sqlite } from "./sqlite";
 import { openapi } from "./openapi";
 import type { GraphClient } from "../graph/client";
 import { search } from "../search/hybrid";
+import {
+  stats as queueStats,
+  deadLetters,
+  retryDeadLetter,
+  retryAllDeadLetters,
+  purgeDeadLetters,
+} from "../plugin/queue";
 
 type ServerInput = {
   path: string;
@@ -806,6 +813,228 @@ export function serveCxdb(input: ServerInput) {
           storage_bytes,
           dedup_hit_rate: 0,
         });
+      }
+
+      // --- Metrics (unified snapshot for dashboard) ---
+      if (request.method === "GET" && pathname === "/v1/metrics") {
+        const contexts = log.contexts({ limit: 100_000 });
+        const turns = contexts.reduce(
+          (sum, item) => sum + chain(log, item.head_turn_id).length,
+          0,
+        );
+        const blobs = new Set(
+          contexts
+            .flatMap((item) =>
+              log.turns(item.context_id, { after: -1, limit: 100_000 }),
+            )
+            .map((item) => item.payload_hash),
+        );
+        const storage_bytes = [...blobs].reduce(
+          (sum, key) => sum + (log.payload(key)?.length ?? 0),
+          0,
+        );
+        const types = log.types();
+        const bundles = new Set<string>();
+        // Count distinct bundles from registry
+        for (const t of types) {
+          const b = log.descriptor(t.type_id, t.type_version);
+          if (b) bundles.add(`${t.type_id}:${t.type_version}`);
+        }
+
+        const now = Date.now();
+        const startTime = now - (process.uptime?.() ?? 0) * 1000;
+
+        return json({
+          ts: new Date().toISOString(),
+          uptime_seconds: Math.floor((now - startTime) / 1000),
+          memory: {
+            sys_total_bytes: 0,
+            sys_available_bytes: 0,
+            sys_free_bytes: 0,
+            sys_cached_bytes: 0,
+            sys_swap_total_bytes: 0,
+            sys_swap_free_bytes: 0,
+            process_rss_bytes: process.memoryUsage?.()?.rss ?? 0,
+            process_vmem_bytes: 0,
+            process_heap_bytes: process.memoryUsage?.()?.heapUsed ?? null,
+            process_open_fds: null,
+            budget_bytes: 0,
+            budget_pct: 0,
+            hard_cap_bytes: 0,
+            pressure_ratio: 0,
+            pressure_level: "OK",
+            spill_threshold_bytes: 0,
+            spill_critical_bytes: 0,
+          },
+          sessions: {
+            total: contexts.length,
+            active: 0,
+            idle: 0,
+            last_activity_unix_ms: now,
+          },
+          objects: {
+            contexts_total: contexts.length,
+            turns_total: turns,
+            blobs_total: blobs.size,
+            registry_types_total: types.length,
+            registry_bundles_total: bundles.size,
+            heads_total: contexts.length,
+          },
+          storage: {
+            turns_log_bytes: storage_bytes,
+            turns_index_bytes: 0,
+            turns_meta_bytes: 0,
+            heads_table_bytes: 0,
+            blobs_pack_bytes: storage_bytes,
+            blobs_index_bytes: 0,
+            data_dir_total_bytes: 0,
+            data_dir_free_bytes: 0,
+          },
+          filesystem: {
+            snapshots_total: 0,
+            index_bytes: 0,
+            content_bytes: 0,
+          },
+          perf: {
+            append_tps_1m: 0,
+            append_tps_5m: 0,
+            append_tps_history: [],
+            get_last_tps_1m: 0,
+            get_last_tps_5m: 0,
+            get_last_tps_history: [],
+            get_blob_tps_1m: 0,
+            get_blob_tps_5m: 0,
+            get_blob_tps_history: [],
+            registry_ingest_tps_1m: 0,
+            registry_ingest_tps_5m: 0,
+            http_req_tps_1m: 0,
+            http_req_tps_5m: 0,
+            http_req_tps_history: [],
+            http_errors_tps_1m: 0,
+            http_errors_tps_5m: 0,
+            append_latency_ms: { p50: 0, p95: 0, p99: 0, max: 0, count: 0 },
+            get_last_latency_ms: { p50: 0, p95: 0, p99: 0, max: 0, count: 0 },
+            get_blob_latency_ms: { p50: 0, p95: 0, p99: 0, max: 0, count: 0 },
+            http_latency_ms: { p50: 0, p95: 0, p99: 0, max: 0, count: 0 },
+          },
+          errors: {
+            total: 0,
+            by_type: {},
+          },
+        });
+      }
+
+      // --- Graph stats ---
+      if (request.method === "GET" && pathname === "/v1/graph/stats") {
+        if (!input.graph) return error(503, "NO_GRAPH", "Graph not connected");
+        const g = input.graph;
+
+        const entityCounts = (await g.roQuery(
+          `MATCH (e:Entity)
+           WHERE e.expired_at IS NULL
+           RETURN e.label_type AS type, e.scope AS scope, count(e) AS count`,
+        )) as { data: Record<string, unknown>[] };
+
+        const byType: Record<string, number> = {};
+        const byScope: Record<string, number> = {};
+        let totalEntities = 0;
+        for (const row of entityCounts.data ?? []) {
+          const t = String(row.type ?? "unknown");
+          const s = String(row.scope ?? "unknown");
+          const c = Number(row.count ?? 0);
+          byType[t] = (byType[t] ?? 0) + c;
+          byScope[s] = (byScope[s] ?? 0) + c;
+          totalEntities += c;
+        }
+
+        const relCounts = (await g.roQuery(
+          `MATCH ()-[r:RELATES_TO]->()
+           WHERE r.expired_at IS NULL
+           RETURN count(r) AS total`,
+        )) as { data: Record<string, unknown>[] };
+        const totalRels = Number(relCounts.data?.[0]?.total ?? 0);
+
+        const embCounts = (await g.roQuery(
+          `MATCH (e:Entity)
+           WHERE e.expired_at IS NULL
+           RETURN
+             count(CASE WHEN e.name_embedding IS NOT NULL THEN 1 END) AS with_embedding,
+             count(e) AS total`,
+        )) as { data: Record<string, unknown>[] };
+        const withEmb = Number(embCounts.data?.[0]?.with_embedding ?? 0);
+        const embTotal = Number(embCounts.data?.[0]?.total ?? 0);
+
+        const quarantine = (await g.roQuery(
+          `MATCH (q:Quarantine) RETURN count(q) AS total`,
+        )) as { data: Record<string, unknown>[] };
+        const quarantineTotal = Number(quarantine.data?.[0]?.total ?? 0);
+
+        return json({
+          entities: {
+            total: totalEntities,
+            by_type: byType,
+            by_scope: byScope,
+          },
+          relationships: {
+            total: totalRels,
+          },
+          embeddings: {
+            with_embedding: withEmb,
+            total: embTotal,
+            coverage_pct: embTotal > 0 ? Math.round((withEmb / embTotal) * 100) : 0,
+          },
+          quarantine: {
+            total: quarantineTotal,
+          },
+        });
+      }
+
+      // --- Queue health ---
+      if (request.method === "GET" && pathname === "/v1/queue/stats") {
+        if (!input.graph) return error(503, "NO_GRAPH", "Graph not connected");
+        const result = await queueStats(input.graph, project_id);
+        return json(result);
+      }
+
+      // --- Dead-letter endpoints ---
+      if (request.method === "GET" && pathname === "/v1/queue/dead-letters") {
+        if (!input.graph) return error(503, "NO_GRAPH", "Graph not connected");
+        const limit = int(url.searchParams.get("limit"), 50);
+        const offset = int(url.searchParams.get("offset"), 0);
+        const result = await deadLetters(input.graph, project_id, {
+          limit,
+          offset,
+        });
+        return json(result);
+      }
+
+      const retryMatch = pathname.match(
+        /^\/v1\/queue\/dead-letters\/([^/]+)\/retry$/,
+      );
+      if (request.method === "POST" && retryMatch) {
+        if (!input.graph) return error(503, "NO_GRAPH", "Graph not connected");
+        const uuid = decodeURIComponent(retryMatch[1]);
+        const ok = await retryDeadLetter(input.graph, uuid);
+        if (!ok) return error(404, "NOT_FOUND", "Dead letter not found");
+        return json({ ok: true, uuid });
+      }
+
+      if (request.method === "POST" && pathname === "/v1/queue/dead-letters/retry-all") {
+        if (!input.graph) return error(503, "NO_GRAPH", "Graph not connected");
+        const count = await retryAllDeadLetters(input.graph, project_id);
+        return json({ ok: true, retried: count });
+      }
+
+      if (request.method === "DELETE" && pathname === "/v1/queue/dead-letters") {
+        if (!input.graph) return error(503, "NO_GRAPH", "Graph not connected");
+        const beforeParam = url.searchParams.get("before");
+        const before = beforeParam ? Number(beforeParam) : undefined;
+        const count = await purgeDeadLetters(
+          input.graph,
+          project_id,
+          before && Number.isFinite(before) ? before : undefined,
+        );
+        return json({ ok: true, purged: count });
       }
 
       if (!pathname.startsWith("/v1/")) {

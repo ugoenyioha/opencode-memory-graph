@@ -2,6 +2,7 @@ import type { GraphClient } from "../graph/client";
 import type { TruthLog } from "../cxdb/interface";
 import { compactionSnapshot } from "../cxdb/journal";
 import { merge } from "../extraction";
+import { detectCommunities } from "../graph/community";
 
 const MIN_MESSAGES = 3;
 const COOLDOWN_MS = 30_000;
@@ -121,10 +122,16 @@ export async function precompact(
     {
       scope: "project",
       project_id: input.directory,
+      session_id: input.sessionID,
       mutation_key: key,
       packs: input.packs,
       truthlog: input.truthlog,
     },
+  );
+
+  // Re-cluster communities after compaction (graph structure may have changed)
+  await detectCommunities(db, { project_id: input.directory }).catch(
+    () => {},
   );
 
   return true;

@@ -10,3 +10,11 @@ export { useAutoFollow } from './useAutoFollow';
 export { useMetrics, generateMockMetrics, type MetricsState, type UseMetricsOptions } from './useMetrics';
 export { useSparklineHistory } from './useSparklineHistory';
 export { useUrlRouter, parseUrl, buildUrl, type RouteState } from './useUrlRouter';
+export {
+  useQueueHealth,
+  type QueueStats,
+  type DeadLetterItem,
+  type DeadLetterResponse,
+  type QueueHealthState,
+  type UseQueueHealthOptions,
+} from './useQueueHealth';

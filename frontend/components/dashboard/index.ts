@@ -7,3 +7,7 @@ export { PerformanceCard } from './PerformanceCard';
 export { SessionsErrorsBar } from './SessionsErrorsBar';
 export { Sparkline } from './Sparkline';
 export { TrendIndicator, getTrend, type Trend } from './TrendIndicator';
+export { QueueHealthCard } from './QueueHealthCard';
+export { DeadLetterTable } from './DeadLetterTable';
+export { GraphStatsCard } from './GraphStatsCard';
+export { EmbeddingCoverageBar } from './EmbeddingCoverageBar';

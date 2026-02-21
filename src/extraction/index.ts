@@ -6,7 +6,11 @@
 import type { GraphClient } from "../graph/client";
 import { embed } from "../embedding";
 import { journal, retry, serial } from "../graph/commit";
-import { entity as entityId, relation as relationId } from "../graph/ids";
+import {
+  entity as entityId,
+  relation as relationId,
+  episode as episodeId,
+} from "../graph/ids";
 import { complete, reserve } from "../graph/mutation";
 import { registry } from "../ontology/registry";
 import { redact } from "../security/redact";
@@ -46,6 +50,7 @@ export async function merge(
     mutation_key?: string;
     scope?: "global" | "project" | "session";
     project_id?: string;
+    session_id?: string;
     trusted_global?: boolean;
     packs?: Array<string | Pack>;
     truthlog?: JournalConfig;
@@ -526,6 +531,88 @@ export async function merge(
           `MATCH ()-[r:RELATES_TO {uuid: $uuid}]->()
          SET r.fact_embedding = vecf32($vec)`,
           { uuid, vec },
+        );
+      }
+    }
+
+    // --- Episode creation (F3) ---
+    // When a session_id is provided, group all entities touched in this batch
+    // into an Episode node linked via MENTIONS edges. Episodes form a NEXT chain
+    // per session, providing temporal context for retrieval.
+    const sessionId = options?.session_id;
+    if (sessionId && names.size > 0) {
+      const touchedUuids = [...names.values()];
+
+      // Find the current max sequence for this session to assign the next one
+      const seqResult = (await read(
+        `MATCH (ep:Episode {session_id: $sid})
+         RETURN max(ep.sequence) AS max_seq`,
+        { sid: sessionId },
+      )) as { data: Record<string, unknown>[] };
+      const maxSeq = Number(seqResult.data?.[0]?.max_seq ?? -1);
+      const nextSeq = Number.isNaN(maxSeq) ? 0 : maxSeq + 1;
+
+      const epUuid = episodeId(sessionId, nextSeq);
+
+      // Build a content summary from entity names for full-text search
+      const contentParts = safe.entities
+        .filter((e) => e.action === "create" && e.name)
+        .map((e) => e.name)
+        .join(", ");
+
+      await write(
+        `MERGE (ep:Episode {uuid: $uuid})
+         ON CREATE SET
+           ep.session_id = $sid,
+           ep.sequence = $seq,
+           ep.content = $content,
+           ep.entity_count = $count,
+           ep.created_at = $now
+         ON MATCH SET
+           ep.content = $content,
+           ep.entity_count = $count`,
+        {
+          uuid: epUuid,
+          sid: sessionId,
+          seq: nextSeq,
+          content: contentParts.slice(0, 2000),
+          count: touchedUuids.length,
+          now: Date.now(),
+        },
+      );
+
+      // Create MENTIONS edges from Episode to each touched Entity
+      for (const entUuid of touchedUuids) {
+        await write(
+          `MATCH (ep:Episode {uuid: $ep_uuid}), (e:Entity {uuid: $ent_uuid})
+           MERGE (ep)-[m:MENTIONS]->(e)
+           ON CREATE SET m.created_at = $now`,
+          { ep_uuid: epUuid, ent_uuid: entUuid, now: Date.now() },
+        );
+      }
+
+      // Build NEXT chain: link previous episode → this episode
+      if (nextSeq > 0) {
+        const prevUuid = episodeId(sessionId, nextSeq - 1);
+        await write(
+          `MATCH (prev:Episode {uuid: $prev_uuid}), (curr:Episode {uuid: $curr_uuid})
+           MERGE (prev)-[n:NEXT]->(curr)
+           ON CREATE SET n.created_at = $now`,
+          { prev_uuid: prevUuid, curr_uuid: epUuid, now: Date.now() },
+        );
+      }
+
+      // Stamp episode UUID onto RELATES_TO edges between entities in this batch
+      // (populates the episodes[] array property for retrieval)
+      if (touchedUuids.length >= 2) {
+        await write(
+          `UNWIND $uuids AS uid1
+           UNWIND $uuids AS uid2
+           WITH uid1, uid2 WHERE uid1 < uid2
+           MATCH (a:Entity {uuid: uid1})-[r:RELATES_TO]-(b:Entity {uuid: uid2})
+           WHERE NOT $ep_uuid IN r.episodes
+           SET r.episodes = r.episodes + $ep_uuid`,
+          { uuids: touchedUuids, ep_uuid: epUuid },
         );
       }
     }

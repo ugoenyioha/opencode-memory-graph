@@ -49,6 +49,75 @@ export function backoff(attempt: number) {
   return BASE_DELAY_MS * 2 ** exp;
 }
 
+export type QueueStats = {
+  pending: number;
+  processing: number;
+  done: number;
+  failed: number;
+  total: number;
+  oldest_pending_at: number | null;
+  avg_processing_ms: number | null;
+};
+
+export async function stats(
+  db: GraphClient,
+  projectID: string,
+): Promise<QueueStats> {
+  const counts = (await db.roQuery(
+    `MATCH (q:QueueItem)
+     WHERE q.project_id = $project_id
+     RETURN q.status AS status, count(q) AS count`,
+    { project_id: projectID },
+  )) as { data: Record<string, unknown>[] };
+
+  const out: QueueStats = {
+    pending: 0,
+    processing: 0,
+    done: 0,
+    failed: 0,
+    total: 0,
+    oldest_pending_at: null,
+    avg_processing_ms: null,
+  };
+
+  for (const row of counts.data ?? []) {
+    const status = String(row.status ?? "");
+    const count = Number(row.count ?? 0);
+    if (status === "pending") out.pending = count;
+    else if (status === "processing") out.processing = count;
+    else if (status === "done") out.done = count;
+    else if (status === "failed") out.failed = count;
+  }
+  out.total = out.pending + out.processing + out.done + out.failed;
+
+  if (out.pending > 0) {
+    const oldest = (await db.roQuery(
+      `MATCH (q:QueueItem)
+       WHERE q.project_id = $project_id AND q.status = 'pending'
+       RETURN min(q.created_at) AS oldest`,
+      { project_id: projectID },
+    )) as { data: Record<string, unknown>[] };
+    const val = oldest.data?.[0]?.oldest;
+    if (val != null) out.oldest_pending_at = Number(val);
+  }
+
+  if (out.done > 0) {
+    const avg = (await db.roQuery(
+      `MATCH (q:QueueItem)
+       WHERE q.project_id = $project_id
+         AND q.status = 'done'
+         AND q.processed_at IS NOT NULL
+         AND q.created_at IS NOT NULL
+       RETURN avg(q.processed_at - q.created_at) AS avg_ms`,
+      { project_id: projectID },
+    )) as { data: Record<string, unknown>[] };
+    const val = avg.data?.[0]?.avg_ms;
+    if (val != null) out.avg_processing_ms = Math.round(Number(val));
+  }
+
+  return out;
+}
+
 export async function enqueue(
   db: GraphClient,
   input: {
@@ -194,4 +263,125 @@ export async function drain(
     }
     return done;
   });
+}
+
+// --- Dead-letter inspection/repair ---
+
+export type DeadLetterItem = {
+  uuid: string;
+  project_id: string;
+  session_id: string;
+  message_id: string;
+  error: string | null;
+  attempts: number;
+  payload: string;
+  created_at: number;
+  updated_at: number;
+};
+
+export async function deadLetters(
+  db: GraphClient,
+  projectID: string,
+  options?: { limit?: number; offset?: number },
+): Promise<{ items: DeadLetterItem[]; total: number }> {
+  const limit = Math.max(1, Math.min(options?.limit ?? 50, 200));
+  const offset = Math.max(0, options?.offset ?? 0);
+
+  const total = (await db.roQuery(
+    `MATCH (q:QueueItem)
+     WHERE q.project_id = $project_id AND q.status = 'failed'
+     RETURN count(q) AS total`,
+    { project_id: projectID },
+  )) as { data: Record<string, unknown>[] };
+
+  const result = (await db.roQuery(
+    `MATCH (q:QueueItem)
+     WHERE q.project_id = $project_id AND q.status = 'failed'
+     RETURN q.uuid AS uuid, q.project_id AS project_id,
+            q.session_id AS session_id, q.message_id AS message_id,
+            q.error AS error, q.attempts AS attempts,
+            q.payload AS payload, q.created_at AS created_at,
+            q.updated_at AS updated_at
+     ORDER BY q.updated_at DESC, q.uuid ASC
+     SKIP $offset LIMIT $limit`,
+    { project_id: projectID, offset, limit },
+  )) as { data: Record<string, unknown>[] };
+
+  return {
+    total: Number(total.data?.[0]?.total ?? 0),
+    items: (result.data ?? []).map((row) => ({
+      uuid: String(row.uuid ?? ""),
+      project_id: String(row.project_id ?? ""),
+      session_id: String(row.session_id ?? ""),
+      message_id: String(row.message_id ?? ""),
+      error: row.error != null ? String(row.error) : null,
+      attempts: Number(row.attempts ?? 0),
+      payload: String(row.payload ?? ""),
+      created_at: Number(row.created_at ?? 0),
+      updated_at: Number(row.updated_at ?? 0),
+    })),
+  };
+}
+
+export async function retryDeadLetter(
+  db: GraphClient,
+  uuid: string,
+): Promise<boolean> {
+  const result = (await db.query(
+    `MATCH (q:QueueItem {uuid: $uuid})
+     WHERE q.status = 'failed'
+     SET q.status = 'pending',
+         q.attempts = 0,
+         q.error = null,
+         q.next_retry_at = null,
+         q.updated_at = $now
+     RETURN q.uuid AS uuid`,
+    { uuid, now: Date.now() },
+  )) as { data: Record<string, unknown>[] };
+  return (result.data?.length ?? 0) > 0;
+}
+
+export async function retryAllDeadLetters(
+  db: GraphClient,
+  projectID: string,
+): Promise<number> {
+  const result = (await db.query(
+    `MATCH (q:QueueItem)
+     WHERE q.project_id = $project_id AND q.status = 'failed'
+     SET q.status = 'pending',
+         q.attempts = 0,
+         q.error = null,
+         q.next_retry_at = null,
+         q.updated_at = $now
+     RETURN count(q) AS count`,
+    { project_id: projectID, now: Date.now() },
+  )) as { data: Record<string, unknown>[] };
+  return Number(result.data?.[0]?.count ?? 0);
+}
+
+export async function purgeDeadLetters(
+  db: GraphClient,
+  projectID: string,
+  before?: number,
+): Promise<number> {
+  const cypher = before != null
+    ? `MATCH (q:QueueItem)
+       WHERE q.project_id = $project_id
+         AND q.status = 'failed'
+         AND q.created_at < $before
+       DELETE q
+       RETURN count(q) AS count`
+    : `MATCH (q:QueueItem)
+       WHERE q.project_id = $project_id
+         AND q.status = 'failed'
+       DELETE q
+       RETURN count(q) AS count`;
+
+  const params: Record<string, string | number> = { project_id: projectID };
+  if (before != null) params.before = before;
+
+  const result = (await db.query(cypher, params)) as {
+    data: Record<string, unknown>[];
+  };
+  return Number(result.data?.[0]?.count ?? 0);
 }
