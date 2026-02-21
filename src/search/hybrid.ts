@@ -5,14 +5,14 @@
 //   2. Graph traversal  (weight: 0.25) — 1-2 hop neighborhood from top matches
 //   3. Episode coherence (weight: 0.15) — co-occurrence in same episodic context
 //   4. Community boost   (weight: 0.10) — same community via Label Propagation
-//   5. Temporal decay    (weight: 0.10) — exponential recency bias
+//   5. Temporal decay    (multiplicative) — exponential recency bias on non-global results
 //
 // Post-processing: tool usage boost, cross-encoder rerank, MMR diversity re-ranking
 
 import type { GraphClient } from "../graph/client";
 import { embed } from "../embedding";
 import { rerank } from "./rerank";
-import { communityMembers } from "../graph/community";
+
 
 export type SearchResult = {
   uuid: string;
@@ -348,53 +348,49 @@ export async function search(
 
   // --- Community boost ---
   // Entities in the same community as top results get a small boost.
+  // Single batched query replaces N+1 communityMembers() calls.
   const topIds = [...out.entries()]
     .sort((a, b) => b[1].score - a[1].score)
     .slice(0, 5)
     .map(([id]) => id);
   if (topIds.length > 0) {
-    const communityUuids = new Set<string>();
-    for (const id of topIds) {
-      const members = await communityMembers(db, id, {
+    const knownIds = new Set(out.keys());
+    const communityResult = (await db.roQuery(
+      `UNWIND $ids AS id
+       MATCH (seed:Entity {uuid: id})
+       WHERE seed.community_id IS NOT NULL
+       WITH COLLECT(DISTINCT seed.community_id) AS cids
+       UNWIND cids AS cid
+       MATCH (e:Entity {community_id: cid})
+       WHERE e.expired_at IS NULL
+         AND (e.scope = 'global' OR e.project_id = $project_id)
+       RETURN DISTINCT e.uuid AS uuid, e.name AS name, e.label_type AS label_type,
+              e.summary AS summary, e.created_at AS created_at,
+              e.scope AS scope, e.confidence AS confidence
+       LIMIT $limit`,
+      {
+        ids: topIds,
         project_id: options.project_id ?? "default",
-        limit: 10,
-      });
-      for (const m of members) communityUuids.add(m);
-    }
+        limit: 50,
+      },
+    )) as { data: Record<string, unknown>[] };
 
-    // Remove already-known entities from community set
-    for (const id of out.keys()) communityUuids.delete(id);
-
-    if (communityUuids.size > 0) {
-      const communityResult = (await db.roQuery(
-        `UNWIND $uuids AS uuid
-         MATCH (e:Entity {uuid: uuid})
-         WHERE e.expired_at IS NULL
-           AND (e.scope = 'global' OR e.project_id = $project_id)
-         RETURN e.uuid AS uuid, e.name AS name, e.label_type AS label_type,
-                e.summary AS summary, e.created_at AS created_at,
-                e.scope AS scope, e.confidence AS confidence`,
+    for (const row of communityResult.data ?? []) {
+      const uuid = row.uuid as string;
+      if (knownIds.has(uuid)) continue;
+      add(
         {
-          uuids: [...communityUuids],
-          project_id: options.project_id ?? "default",
+          uuid,
+          name: row.name as string,
+          type: row.label_type as string,
+          summary: row.summary as string,
+          created_at: row.created_at as number,
+          scope: row.scope as string,
+          confidence: row.confidence as string,
+          score: 1.0,
         },
-      )) as { data: Record<string, unknown>[] };
-
-      for (const row of communityResult.data ?? []) {
-        add(
-          {
-            uuid: row.uuid as string,
-            name: row.name as string,
-            type: row.label_type as string,
-            summary: row.summary as string,
-            created_at: row.created_at as number,
-            scope: row.scope as string,
-            confidence: row.confidence as string,
-            score: 1.0,
-          },
-          0.10,
-        );
-      }
+        0.10,
+      );
     }
   }
 

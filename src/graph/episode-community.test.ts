@@ -319,6 +319,165 @@ describe("community detection", () => {
   });
 });
 
+describe("episode edge stamps", () => {
+  const stampRoot = path.join(process.cwd(), ".tmp", "ep-stamp");
+
+  beforeAll(async () => {
+    await rm(stampRoot, { recursive: true, force: true });
+    await mkdir(stampRoot, { recursive: true });
+  });
+
+  afterAll(async () => {
+    await rm(stampRoot, { recursive: true, force: true });
+  });
+
+  test("RELATES_TO episodes[] is populated with episode UUID (fix-9)", async () => {
+    const db = await connect({ mode: "local", path: stampRoot });
+    await schema(db);
+
+    await merge(
+      db,
+      {
+        entities: [
+          { action: "create", name: "Alpha", label_type: "Concept", summary: "Node Alpha" },
+          { action: "create", name: "Beta", label_type: "Concept", summary: "Node Beta" },
+        ],
+        relationships: [
+          { source_name: "Alpha", target_name: "Beta", name: "links_to", fact: "Alpha links to Beta" },
+        ],
+      },
+      {
+        scope: "project",
+        project_id: "stamp-test",
+        session_id: "stamp-sess",
+        packs: ["coding"],
+      },
+    );
+
+    // The RELATES_TO edge between Alpha and Beta should have the episode UUID in episodes[]
+    const epResult = (await db.roQuery(
+      `MATCH (ep:Episode {session_id: 'stamp-sess'})
+       RETURN ep.uuid AS uuid`,
+    )) as { data: Record<string, unknown>[] };
+    expect(epResult.data.length).toBe(1);
+    const epUuid = epResult.data[0]!.uuid as string;
+
+    const relResult = (await db.roQuery(
+      `MATCH (a:Entity {name: 'Alpha'})-[r:RELATES_TO]-(b:Entity {name: 'Beta'})
+       WHERE a.project_id = 'stamp-test'
+       RETURN r.episodes AS episodes`,
+    )) as { data: Record<string, unknown>[] };
+
+    expect(relResult.data.length).toBeGreaterThanOrEqual(1);
+    const episodes = relResult.data[0]!.episodes as string[];
+    expect(Array.isArray(episodes)).toBe(true);
+    expect(episodes).toContain(epUuid);
+
+    await db.close();
+  });
+
+  test("concurrent session merges get sequential episode numbers (fix-10)", async () => {
+    const db = await connect({ mode: "local", path: stampRoot });
+    await schema(db);
+
+    // Merge two batches in the same session sequentially (simulating rapid calls)
+    await merge(
+      db,
+      {
+        entities: [
+          { action: "create", name: "Gamma", label_type: "Concept", summary: "Node Gamma" },
+        ],
+        relationships: [],
+      },
+      {
+        scope: "project",
+        project_id: "stamp-test",
+        session_id: "stamp-sess",
+        packs: ["coding"],
+      },
+    );
+
+    await merge(
+      db,
+      {
+        entities: [
+          { action: "create", name: "Delta", label_type: "Concept", summary: "Node Delta" },
+        ],
+        relationships: [],
+      },
+      {
+        scope: "project",
+        project_id: "stamp-test",
+        session_id: "stamp-sess",
+        packs: ["coding"],
+      },
+    );
+
+    // Should have episodes 0, 1, 2, 3 for this session (0 from fix-9 test, plus these)
+    const seqResult = (await db.roQuery(
+      `MATCH (ep:Episode {session_id: 'stamp-sess'})
+       RETURN ep.sequence AS seq
+       ORDER BY ep.sequence`,
+    )) as { data: Record<string, unknown>[] };
+
+    const sequences = seqResult.data.map((r) => Number(r.seq));
+    // Verify sequential ordering with no gaps
+    for (let i = 0; i < sequences.length; i++) {
+      expect(sequences[i]).toBe(i);
+    }
+    expect(sequences.length).toBeGreaterThanOrEqual(3);
+
+    await db.close();
+  });
+});
+
+describe("community edge cases", () => {
+  test("fully connected graph produces single community (fix-12)", async () => {
+    const fcRoot = path.join(process.cwd(), ".tmp", "comm-fc");
+    await rm(fcRoot, { recursive: true, force: true });
+    await mkdir(fcRoot, { recursive: true });
+    const db = await connect({ mode: "local", path: fcRoot });
+    await schema(db);
+
+    // Create a fully connected graph: X-Y-Z with all pairs connected
+    await merge(
+      db,
+      {
+        entities: [
+          { action: "create", name: "X", label_type: "Concept", summary: "Node X" },
+          { action: "create", name: "Y", label_type: "Concept", summary: "Node Y" },
+          { action: "create", name: "Z", label_type: "Concept", summary: "Node Z" },
+        ],
+        relationships: [
+          { source_name: "X", target_name: "Y", name: "connected", fact: "X connects to Y" },
+          { source_name: "Y", target_name: "Z", name: "connected", fact: "Y connects to Z" },
+          { source_name: "X", target_name: "Z", name: "connected", fact: "X connects to Z" },
+        ],
+      },
+      {
+        scope: "project",
+        project_id: "fc-test",
+        packs: ["coding"],
+      },
+    );
+
+    const n = await detectCommunities(db, { project_id: "fc-test" });
+    expect(n).toBe(1);
+
+    // Verify all three nodes have the same community_id
+    const result = (await db.roQuery(
+      `MATCH (e:Entity)
+       WHERE e.project_id = 'fc-test' AND e.community_id IS NOT NULL
+       RETURN DISTINCT e.community_id AS cid`,
+    )) as { data: Record<string, unknown>[] };
+
+    expect(result.data.length).toBe(1);
+
+    await db.close();
+    await rm(fcRoot, { recursive: true, force: true });
+  });
+});
+
 describe("episode id determinism", () => {
   test("same session + sequence yields same id", () => {
     const a = episodeId("sess-1", 0);

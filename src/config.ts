@@ -119,11 +119,26 @@ export function runtime(): Config {
       process.env.MEMORY_GRAPH_TRUTHLOG_PATH ??
       "~/.opencode/memory/truthlog.sqlite",
   };
+  const rerankerMode = process.env.MEMORY_RERANKER as
+    | "off"
+    | "cohere"
+    | "voyage"
+    | undefined;
+  const rerankerConfig: Record<string, unknown> = {
+    mode: rerankerMode ?? "off",
+  };
+  if (process.env.MEMORY_RERANKER_MODEL) {
+    rerankerConfig.model = process.env.MEMORY_RERANKER_MODEL;
+  }
+  if (process.env.MEMORY_RERANKER_TOP_K) {
+    rerankerConfig.top_k = Number(process.env.MEMORY_RERANKER_TOP_K);
+  }
   return config({
     storage,
     embeddings,
     default_scope: "project",
     proactive,
     truthlog,
+    reranker: rerankerConfig,
   });
 }

@@ -131,7 +131,9 @@ export async function precompact(
 
   // Re-cluster communities after compaction (graph structure may have changed)
   await detectCommunities(db, { project_id: input.directory }).catch(
-    () => {},
+    (err) => {
+      console.error("[memory-graph] community detection failed after compaction:", err);
+    },
   );
 
   return true;

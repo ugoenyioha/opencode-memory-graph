@@ -4,6 +4,8 @@ import path from "node:path";
 import { connect } from "../graph/client";
 import { schema } from "../graph/schema";
 import { applyUsageBoost, expandQuery, rerankMMR, search } from "./hybrid";
+import { merge } from "../extraction";
+import { detectCommunities } from "../graph/community";
 
 const root = path.join(process.cwd(), ".tmp", "p4-search");
 
@@ -220,5 +222,68 @@ describe("search mvp", () => {
     expect(out.find((item) => item.uuid === "a")!.score).toBeGreaterThan(
       out.find((item) => item.uuid === "b")!.score,
     );
+  });
+});
+
+describe("episode coherence + community boost in search (fix-11)", () => {
+  const searchRoot = path.join(process.cwd(), ".tmp", "p4-srch2");
+
+  beforeAll(async () => {
+    await rm(searchRoot, { recursive: true, force: true });
+    await mkdir(searchRoot, { recursive: true });
+  });
+
+  afterAll(async () => {
+    await rm(searchRoot, { recursive: true, force: true });
+  });
+
+  test("search surfaces co-episode and community-adjacent entities", async () => {
+    const db = await connect({ mode: "local", path: searchRoot });
+    await schema(db);
+
+    // Create entities with session context (triggers episode creation)
+    await merge(
+      db,
+      {
+        entities: [
+          { action: "create", name: "Redis caching", label_type: "Concept", summary: "in-memory caching with Redis" },
+          { action: "create", name: "Session store", label_type: "Component", summary: "session persistence layer" },
+          { action: "create", name: "Cache invalidation", label_type: "Pattern", summary: "cache invalidation strategies" },
+        ],
+        relationships: [
+          { source_name: "Redis caching", target_name: "Session store", name: "implements", fact: "Redis implements session store" },
+          { source_name: "Redis caching", target_name: "Cache invalidation", name: "requires", fact: "Redis caching requires invalidation" },
+        ],
+      },
+      {
+        scope: "project",
+        project_id: "srch2-test",
+        session_id: "srch2-sess",
+        packs: ["coding"],
+      },
+    );
+
+    // Run community detection so community boost can work
+    await detectCommunities(db, { project_id: "srch2-test" });
+
+    // Search for "Redis" — should surface connected entities via both
+    // episode coherence (co-mentioned in same episode) and community boost
+    const results = await search(db, {
+      query: "Redis caching",
+      limit: 10,
+      project_id: "srch2-test",
+    });
+
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    // At minimum, the directly matching entity should appear
+    expect(results.some((r) => r.name === "Redis caching")).toBe(true);
+    // Graph traversal + episode coherence should surface related entities
+    const names = results.map((r) => r.name);
+    // Session store or Cache invalidation should appear via graph or episode signals
+    const hasRelated =
+      names.includes("Session store") || names.includes("Cache invalidation");
+    expect(hasRelated).toBe(true);
+
+    await db.close();
   });
 });

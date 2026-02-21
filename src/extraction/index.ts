@@ -581,15 +581,14 @@ export async function merge(
         },
       );
 
-      // Create MENTIONS edges from Episode to each touched Entity
-      for (const entUuid of touchedUuids) {
-        await write(
-          `MATCH (ep:Episode {uuid: $ep_uuid}), (e:Entity {uuid: $ent_uuid})
-           MERGE (ep)-[m:MENTIONS]->(e)
-           ON CREATE SET m.created_at = $now`,
-          { ep_uuid: epUuid, ent_uuid: entUuid, now: Date.now() },
-        );
-      }
+      // Create MENTIONS edges from Episode to each touched Entity (batched)
+      await write(
+        `UNWIND $ent_uuids AS ent_uuid
+         MATCH (ep:Episode {uuid: $ep_uuid}), (e:Entity {uuid: ent_uuid})
+         MERGE (ep)-[m:MENTIONS]->(e)
+         ON CREATE SET m.created_at = $now`,
+        { ep_uuid: epUuid, ent_uuids: touchedUuids, now: Date.now() },
+      );
 
       // Build NEXT chain: link previous episode → this episode
       if (nextSeq > 0) {
@@ -611,7 +610,7 @@ export async function merge(
            WITH uid1, uid2 WHERE uid1 < uid2
            MATCH (a:Entity {uuid: uid1})-[r:RELATES_TO]-(b:Entity {uuid: uid2})
            WHERE NOT $ep_uuid IN r.episodes
-           SET r.episodes = r.episodes + $ep_uuid`,
+           SET r.episodes = r.episodes + [$ep_uuid]`,
           { uuids: touchedUuids, ep_uuid: epUuid },
         );
       }

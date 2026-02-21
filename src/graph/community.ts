@@ -39,21 +39,21 @@ export async function detectCommunities(
   );
   if (entities.length === 0) return 0;
 
-  // Fetch all active edges
+  // Fetch all active edges (directed query to avoid duplicates)
   const edgeResult = (await retry(() =>
     db.roQuery(
-      `MATCH (a:Entity)-[r:RELATES_TO]-(b:Entity)
+      `MATCH (a:Entity)-[r:RELATES_TO]->(b:Entity)
        WHERE r.expired_at IS NULL
          AND a.expired_at IS NULL
          AND b.expired_at IS NULL
          AND (a.scope = 'global' OR a.project_id = $project_id)
          AND (b.scope = 'global' OR b.project_id = $project_id)
-       RETURN DISTINCT a.uuid AS source, b.uuid AS target`,
+       RETURN a.uuid AS source, b.uuid AS target`,
       { project_id: projectId },
     ),
   )) as { data: Record<string, unknown>[] };
 
-  // Build adjacency list
+  // Build adjacency list (undirected: add both directions from directed edges)
   const adjacency = new Map<string, string[]>();
   for (const uuid of entities) {
     adjacency.set(uuid, []);
@@ -111,9 +111,10 @@ export async function detectCommunities(
     if (!changed) break;
   }
 
-  // Normalize: remap labels to sequential community IDs
+  // Normalize: remap labels to sequential community IDs (start from 1 to avoid
+  // falsy-zero issues with IS NOT NULL checks in FalkorDB)
   const labelToId = new Map<string, number>();
-  let nextId = 0;
+  let nextId = 1;
   for (const label of labels.values()) {
     if (!labelToId.has(label)) {
       labelToId.set(label, nextId++);
@@ -159,8 +160,9 @@ export async function communityMembers(
       `MATCH (seed:Entity {uuid: $uuid})
        WHERE seed.community_id IS NOT NULL
        WITH seed.community_id AS cid
-       MATCH (e:Entity {community_id: cid})
-       WHERE e.expired_at IS NULL
+       MATCH (e:Entity)
+       WHERE e.community_id = cid
+         AND e.expired_at IS NULL
          AND (e.scope = 'global' OR e.project_id = $project_id)
          AND e.uuid <> $uuid
        RETURN e.uuid AS uuid
