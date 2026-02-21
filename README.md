@@ -15,6 +15,14 @@ The plugin now includes a local truth log and a CXDB-compatible runtime API.
 - A CXDB-compatible HTTP API is available, with a local viewer for quick inspection.
 - End-to-end and conformance tests are now part of the validation workflow.
 
+### CXDB feature parity snapshot
+
+- **Branch-from-any-turn:** partially supported. We support context forking and branchable session context; explicit fork-from-arbitrary-turn APIs can be extended further.
+- **Fast append:** supported via append-only SQLite turns with idempotency and integrity constraints.
+- **Content deduplication:** supported via BLAKE3 payload hashing in CAS storage.
+- **Type-safe projections:** supported via type registry + projection APIs.
+- **Built-in UI:** partially supported. We provide a local inspection viewer and CXDB-compatible API surface, not the full upstream CXDB UI stack.
+
 ## Why this is useful
 
 Most teams still experience memory loss in day-to-day AI coding workflows:
