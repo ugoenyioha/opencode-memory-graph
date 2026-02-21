@@ -5,8 +5,9 @@ import { sqlite } from "./sqlite";
 import { MUTATION_TYPE } from "./types";
 import { serveCxdb } from "./server";
 import type { GraphClient } from "../graph/client";
+import { testDir } from "../test/tmpdir";
 
-const root = path.join(process.cwd(), ".tmp", "p6-server");
+const root = testDir("p6-server");
 const file = path.join(root, "truth.sqlite");
 
 describe("cxdb compatibility server", () => {

@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
-import path from "node:path";
 import { connect } from "./client";
 import { schema } from "./schema";
 import { merge } from "../extraction";
 import { detectCommunities, communityMembers } from "./community";
 import { episode as episodeId } from "./ids";
+import { testDir } from "../test/tmpdir";
 
-const root = path.join(process.cwd(), ".tmp", "ep-comm");
+const root = testDir("ep-comm");
 
 describe("episode creation", () => {
   beforeAll(async () => {
@@ -169,7 +169,7 @@ describe("episode creation", () => {
 });
 
 describe("community detection", () => {
-  const commRoot = path.join(process.cwd(), ".tmp", "comm-det");
+  const commRoot = testDir("comm-det");
 
   beforeAll(async () => {
     await rm(commRoot, { recursive: true, force: true });
@@ -274,7 +274,7 @@ describe("community detection", () => {
   });
 
   test("detectCommunities returns 0 for empty graph", async () => {
-    const emptyRoot = path.join(process.cwd(), ".tmp", "comm-empty");
+    const emptyRoot = testDir("comm-empty");
     await rm(emptyRoot, { recursive: true, force: true });
     await mkdir(emptyRoot, { recursive: true });
     const db = await connect({ mode: "local", path: emptyRoot });
@@ -288,7 +288,7 @@ describe("community detection", () => {
   });
 
   test("isolated entities each get their own community", async () => {
-    const isoRoot = path.join(process.cwd(), ".tmp", "comm-iso");
+    const isoRoot = testDir("comm-iso");
     await rm(isoRoot, { recursive: true, force: true });
     await mkdir(isoRoot, { recursive: true });
     const db = await connect({ mode: "local", path: isoRoot });
@@ -320,7 +320,7 @@ describe("community detection", () => {
 });
 
 describe("episode edge stamps", () => {
-  const stampRoot = path.join(process.cwd(), ".tmp", "ep-stamp");
+  const stampRoot = testDir("ep-stamp");
 
   beforeAll(async () => {
     await rm(stampRoot, { recursive: true, force: true });
@@ -433,7 +433,7 @@ describe("episode edge stamps", () => {
 
 describe("community edge cases", () => {
   test("fully connected graph produces single community (fix-12)", async () => {
-    const fcRoot = path.join(process.cwd(), ".tmp", "comm-fc");
+    const fcRoot = testDir("comm-fc");
     await rm(fcRoot, { recursive: true, force: true });
     await mkdir(fcRoot, { recursive: true });
     const db = await connect({ mode: "local", path: fcRoot });

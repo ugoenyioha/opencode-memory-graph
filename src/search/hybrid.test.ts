@@ -6,8 +6,9 @@ import { schema } from "../graph/schema";
 import { applyUsageBoost, expandQuery, rerankMMR, search } from "./hybrid";
 import { merge } from "../extraction";
 import { detectCommunities } from "../graph/community";
+import { testDir } from "../test/tmpdir";
 
-const root = path.join(process.cwd(), ".tmp", "p4-search");
+const root = testDir("p4-search");
 
 describe("search mvp", () => {
   beforeAll(async () => {
@@ -226,7 +227,7 @@ describe("search mvp", () => {
 });
 
 describe("episode coherence + community boost in search (fix-11)", () => {
-  const searchRoot = path.join(process.cwd(), ".tmp", "p4-srch2");
+  const searchRoot = testDir("p4-srch2");
 
   beforeAll(async () => {
     await rm(searchRoot, { recursive: true, force: true });

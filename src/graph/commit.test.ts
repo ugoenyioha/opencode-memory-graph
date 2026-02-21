@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
-import path from "node:path";
 import { serial, retry, journal } from "./commit";
 import { connect } from "./client";
 import { schema } from "./schema";
+import { testDir } from "../test/tmpdir";
 
-const root = path.join(process.cwd(), ".tmp", "p2-commit");
+const root = testDir("p2-commit");
 
 describe("commit reliability", () => {
   beforeAll(async () => {

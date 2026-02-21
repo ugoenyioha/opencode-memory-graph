@@ -5,8 +5,9 @@ import { connect } from "../graph/client";
 import { reserve } from "../graph/mutation";
 import { schema } from "../graph/schema";
 import { merge } from "./index";
+import { testDir } from "../test/tmpdir";
 
-const root = path.join(process.cwd(), ".tmp", "p1-extraction");
+const root = testDir("p1-extraction");
 
 describe("extraction merge", () => {
   beforeAll(async () => {

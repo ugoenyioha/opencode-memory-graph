@@ -11,8 +11,9 @@ import {
   shouldCompact,
   summarize,
 } from "./compaction";
+import { testDir } from "../test/tmpdir";
 
-const root = path.join(process.cwd(), ".tmp", "compaction");
+const root = testDir("compaction");
 
 describe("pre-compaction snapshot", () => {
   beforeAll(async () => {

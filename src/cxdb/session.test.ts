@@ -3,8 +3,9 @@ import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { sqlite } from "./sqlite";
 import { sessions } from "./session";
+import { testDir } from "../test/tmpdir";
 
-const root = path.join(process.cwd(), ".tmp", "p2-session-store");
+const root = testDir("p2-session");
 
 describe("cxdb session mapping", () => {
   beforeAll(async () => {

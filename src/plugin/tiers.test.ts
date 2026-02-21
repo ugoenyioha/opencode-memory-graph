@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
-import path from "node:path";
 import { connect } from "../graph/client";
 import { schema } from "../graph/schema";
 import { cap, working } from "./tiers";
+import { testDir } from "../test/tmpdir";
 
-const root = path.join(process.cwd(), ".tmp", "p4-tiers");
+const root = testDir("p4-tiers");
 
 describe("working tier", () => {
   beforeAll(async () => {

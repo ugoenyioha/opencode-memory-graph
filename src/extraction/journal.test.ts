@@ -6,8 +6,9 @@ import { schema } from "../graph/schema";
 import { merge } from "./index";
 import { sqlite } from "../cxdb/sqlite";
 import { MUTATION_TYPE } from "../cxdb/types";
+import { testDir } from "../test/tmpdir";
 
-const root = path.join(process.cwd(), ".tmp", "p2-extraction-journal");
+const root = testDir("p2-ext-journal");
 
 describe("extraction journal integration", () => {
   beforeAll(async () => {

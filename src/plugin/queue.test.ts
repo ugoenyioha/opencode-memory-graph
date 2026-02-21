@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
-import path from "node:path";
 import { connect } from "../graph/client";
 import { schema } from "../graph/schema";
 import { backoff, drain, enqueue } from "./queue";
+import { testDir } from "../test/tmpdir";
 
-const root = path.join(process.cwd(), ".tmp", "queue");
+const root = testDir("queue");
 
 describe("extraction queue", () => {
   beforeAll(async () => {

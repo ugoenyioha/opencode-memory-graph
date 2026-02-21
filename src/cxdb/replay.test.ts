@@ -6,8 +6,9 @@ import { replay } from "./replay";
 import { MUTATION_TYPE } from "./types";
 import { connect } from "../graph/client";
 import { schema } from "../graph/schema";
+import { testDir } from "../test/tmpdir";
 
-const root = path.join(process.cwd(), ".tmp", "p3-replay");
+const root = testDir("p3-replay");
 
 describe("cxdb replay", () => {
   beforeAll(async () => {

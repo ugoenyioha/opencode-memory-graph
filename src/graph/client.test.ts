@@ -3,8 +3,9 @@ import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { connect } from "./client";
 import { schema } from "./schema";
+import { testDir } from "../test/tmpdir";
 
-const root = path.join(process.cwd(), ".tmp", "p0-graph");
+const root = testDir("p0-graph");
 
 async function reset(dir: string) {
   await rm(dir, { recursive: true, force: true });

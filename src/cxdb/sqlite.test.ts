@@ -5,8 +5,9 @@ import { Database } from "bun:sqlite";
 import { decode } from "@msgpack/msgpack";
 import { sqlite } from "./sqlite";
 import { MUTATION_TYPE } from "./types";
+import { testDir } from "../test/tmpdir";
 
-const root = path.join(process.cwd(), ".tmp", "p1-cxdb-sqlite");
+const root = testDir("p1-cxdb-sqlite");
 
 function dbPath(name: string) {
   return path.join(root, `${name}.sqlite`);

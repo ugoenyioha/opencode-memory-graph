@@ -7,8 +7,9 @@ import { merge } from "../extraction";
 import { sqlite } from "./sqlite";
 import { replay } from "./replay";
 import { serveCxdb } from "./server";
+import { testDir } from "../test/tmpdir";
 
-const root = path.join(process.cwd(), ".tmp", "p7-e2e");
+const root = testDir("p7-e2e");
 
 describe("truthlog e2e", () => {
   beforeAll(async () => {
