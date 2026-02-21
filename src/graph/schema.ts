@@ -13,9 +13,11 @@ const rangeIndexes = [
   `CREATE INDEX FOR (e:Entity) ON (e.confidence)`,
   `CREATE INDEX FOR (e:Entity) ON (e.created_at)`,
   `CREATE INDEX FOR (e:Entity) ON (e.validated_at)`,
+  `CREATE INDEX FOR (e:Entity) ON (e.community_id)`,
   // Episode
   `CREATE INDEX FOR (ep:Episode) ON (ep.uuid)`,
   `CREATE INDEX FOR (ep:Episode) ON (ep.session_id)`,
+  `CREATE INDEX FOR (ep:Episode) ON (ep.sequence)`,
   `CREATE INDEX FOR (ep:Episode) ON (ep.created_at)`,
   // Mutation
   `CREATE INDEX FOR (m:Mutation) ON (m.uuid)`,

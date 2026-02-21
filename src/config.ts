@@ -59,6 +59,14 @@ const truthlog = z
     path: "~/.opencode/memory/truthlog.sqlite",
   });
 
+const reranker = z
+  .object({
+    mode: z.enum(["off", "cohere", "voyage"]).default("off"),
+    model: z.string().optional(),
+    top_k: z.number().int().positive().default(20),
+  })
+  .default({ mode: "off", top_k: 20 });
+
 export const ConfigSchema = z.object({
   storage: z
     .union([local, remote])
@@ -68,6 +76,7 @@ export const ConfigSchema = z.object({
   packs,
   proactive,
   truthlog,
+  reranker,
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -110,11 +119,26 @@ export function runtime(): Config {
       process.env.MEMORY_GRAPH_TRUTHLOG_PATH ??
       "~/.opencode/memory/truthlog.sqlite",
   };
+  const rerankerMode = process.env.MEMORY_RERANKER as
+    | "off"
+    | "cohere"
+    | "voyage"
+    | undefined;
+  const rerankerConfig: Record<string, unknown> = {
+    mode: rerankerMode ?? "off",
+  };
+  if (process.env.MEMORY_RERANKER_MODEL) {
+    rerankerConfig.model = process.env.MEMORY_RERANKER_MODEL;
+  }
+  if (process.env.MEMORY_RERANKER_TOP_K) {
+    rerankerConfig.top_k = Number(process.env.MEMORY_RERANKER_TOP_K);
+  }
   return config({
     storage,
     embeddings,
     default_scope: "project",
     proactive,
     truthlog,
+    reranker: rerankerConfig,
   });
 }

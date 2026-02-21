@@ -55,10 +55,23 @@ These changes were intentional to prioritize safe MVP behavior and truthful oper
 - Full hook architecture in the design table is not fully active yet.
 - Optional long-duration soak remains an operational choice, not a functional correctness requirement.
 
+## Feature consolidation update
+
+All deferred features from the consolidation audit have been implemented:
+
+1. **Queue health reporting** — `stats()` in `src/plugin/queue.ts`, `GET /v1/queue/stats` endpoint, `QueueHealthCard.tsx` dashboard component.
+2. **Dead-letter inspection/repair** — `deadLetters()`, `retryDeadLetter()`, `retryAllDeadLetters()`, `purgeDeadLetters()` in `src/plugin/queue.ts`; 4 REST endpoints; `DeadLetterTable.tsx` component.
+3. **Cross-encoder reranking** — `src/search/rerank.ts` with off/cohere/voyage provider abstraction; wired into hybrid search pipeline.
+4. **Rich observability dashboard** — `GET /v1/metrics`, `GET /v1/graph/stats` endpoints; `GraphStatsCard.tsx`, `EmbeddingCoverageBar.tsx` components; unified `ServerHealthDashboard.tsx`.
+5. **Episode/community retrieval** — Episode creation during extraction (`src/extraction/index.ts`) with MENTIONS/NEXT graph structures; community detection via Label Propagation (`src/graph/community.ts`); both wired as search dimensions in `src/search/hybrid.ts` (episode coherence: 0.15 weight, community boost: 0.10 weight); re-clustering triggered during compaction.
+
+Hybrid search pipeline now has 5 weighted signals: vector (0.40), graph traversal (0.25), episode coherence (0.15), community boost (0.10), temporal decay (0.10) — plus tool usage boost, cross-encoder reranking, and MMR diversity.
+
 ## Current go-forward checkpoints
 
 1. Keep CI remote-validation variables/secrets current and rotate test credentials/certs.
-2. Add operator health signals and dead-letter handling for queue/usage runtime paths.
+2. Monitor episode/community impact on retrieval quality in production coding sessions.
+3. Evaluate cross-encoder reranking latency when enabled with external providers (Cohere, Voyage).
 
 ## CXDB Phase 1 gate update
 

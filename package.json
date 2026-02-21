@@ -12,14 +12,15 @@
     "build": "bun build src/index.ts --outdir dist --target bun",
     "dev": "bun --watch src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test",
+    "test": "bun test src",
     "lint": "biome check src/",
     "dryrun:interfaces": "bun scripts/e2e-interfaces-dry-run.ts",
     "soak:remote": "bun scripts/remote-soak.ts",
     "worker:queue": "bun scripts/queue-worker.ts",
     "rebuild:graph": "bun scripts/rebuild-graph.ts",
     "check:integrity": "bun scripts/integrity-check.ts",
-    "serve:cxdb": "bun scripts/cxdb-server.ts"
+    "serve:cxdb": "bun scripts/cxdb-server.ts",
+    "build:frontend": "bun install --cwd frontend && bun run --cwd frontend build"
   },
   "exports": {
     ".": {

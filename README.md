@@ -4,6 +4,25 @@ A memory plugin for [OpenCode](https://github.com/anomalyco/opencode) that helps
 
 It stores memory in a knowledge graph backed by [FalkorDB](https://www.falkordb.com/), so the assistant can recall decisions, relationships, and lessons learned instead of starting cold every time.
 
+## New in CXDB phases 1-7
+
+The plugin now includes a local truth log and a CXDB-compatible runtime API.
+
+- Every memory write is saved to a local SQLite truth log as an immutable turn.
+- Graph writes now use a journal-first flow, so derived graph state is backed by truth-log history.
+- You can replay history, rebuild graph state, and run integrity checks after failures.
+- Session-to-context mapping keeps memory branchable per session instead of one shared thread.
+- A CXDB-compatible HTTP API is available, with a local viewer for quick inspection.
+- End-to-end and conformance tests are now part of the validation workflow.
+
+### CXDB feature parity snapshot
+
+- **Branch-from-any-turn:** supported via turn-level forking (`base_turn_id`) and context lineage tracking.
+- **Fast append:** supported via append-only SQLite turns with idempotency and integrity constraints.
+- **Content deduplication:** supported via BLAKE3 payload hashing in CAS storage.
+- **Type-safe projections:** supported via type registry + projection APIs.
+- **Built-in UI:** supported via the upstream CXDB React frontend served from static export.
+
 ## Why this is useful
 
 Most teams still experience memory loss in day-to-day AI coding workflows:
@@ -17,6 +36,22 @@ This plugin makes memory durable and queryable, so you can ask things like:
 - "Why did we choose this approach?"
 - "What failed last time and what was the fix?"
 - "What should I avoid before touching this area?"
+
+## Why this matters for agentic memory
+
+- deterministic replay and auditability make memory behavior explainable over time
+- recoverability from projection corruption means you can rebuild derived state from truth
+- session-to-context mapping enables branchable context per session instead of one global thread
+- safer iterative autonomous agents: bad writes are easier to detect, isolate, and correct
+
+## What is novel (and what is not)
+
+This project is not the only memory system in the space: [CXDB](https://github.com/strongdm/cxdb) and [Mem0](https://mem0.ai) both exist and solve real problems.
+
+- CXDB focuses on a portable memory protocol and ecosystem interoperability
+- Mem0 focuses on managed memory extraction and retrieval for app and agent workflows
+- this repo focuses on an OpenCode plugin that combines graph projection, a local-first truth log, a CXDB-compatible API surface, and adversarial conformance gates
+- the novelty is the combination and integration approach, not a claim of absolute uniqueness
 
 ## Why FalkorDB local + remote matters
 
@@ -49,6 +84,14 @@ Validation run in this repo:
 - remote harness validation in `src/graph/remote.test.ts`
 - interface dry run in `scripts/e2e-interfaces-dry-run.ts`
 
+## Evidence
+
+Latest local verification run passed all current tests (99 pass / 0 fail at time of writing; counts can change as the suite evolves).
+
+- `bun run typecheck`
+- `bun test`
+- `bun test src/cxdb/e2e.test.ts`
+
 ## Quickstart
 
 1. Install and build:
@@ -72,9 +115,18 @@ bun run build
 ```bash
 export MEMORY_GRAPH_PATH="$HOME/.opencode/memory"
 export MEMORY_EMBEDDINGS="off" # off | local | cloud
+export MEMORY_GRAPH_TRUTHLOG=1
+export MEMORY_GRAPH_TRUTHLOG_PATH="$HOME/.opencode/memory/truthlog.sqlite"
 ```
 
-4. Start OpenCode and use:
+4. Optional: run the CXDB-compatible local server:
+
+```bash
+bun run build:frontend
+bun run serve:cxdb
+```
+
+5. Start OpenCode and use:
 
 - `memory_search` to find relevant memories
 - `memory_get` to inspect one entity and its nearby links
@@ -96,6 +148,9 @@ export MEMORY_EMBEDDINGS="off" # off | local | cloud
 
 | Document                                                           | What it covers                                                                   |
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| [CXDB Phase 1](docs/cxdb-phase1.md)                                | SQLite truth log foundation, adversarial gate blockers/fixes, and acceptance     |
+| [CXDB Phases 2-7](docs/cxdb-phases-2-7.md)                         | Journal integration, replay/rebuild/integrity, API/visualization, and E2E gates  |
+| [CXDB Phase 8](docs/cxdb-phase8.md)                                | Turn-level fork parity, SSE/API expansion, and upstream frontend adoption        |
 | [Usage](docs/usage.md)                                             | Setup, config, local/remote behavior, troubleshooting                            |
 | [Orbstack E2E](docs/e2e-opencode-orbstack.md)                      | Repeatable bring-up, verification, and teardown workflow                         |
 | [Plan Conformance](docs/plan-conformance.md)                       | Roadmap-phase and deferred-item audit against implementation                     |

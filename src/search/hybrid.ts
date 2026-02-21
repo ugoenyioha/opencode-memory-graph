@@ -1,14 +1,18 @@
 // Hybrid search pipeline
 //
-// Combines three signals:
-//   1. Vector similarity (weight: 0.5) — cosine distance on name_embedding
-//   2. Graph traversal (weight: 0.3) — 1-2 hop neighborhood from top matches
-//   3. Temporal decay (weight: 0.2) — exponential recency bias
+// Combines five signals:
+//   1. Vector similarity (weight: 0.40) — cosine distance on name_embedding
+//   2. Graph traversal  (weight: 0.25) — 1-2 hop neighborhood from top matches
+//   3. Episode coherence (weight: 0.15) — co-occurrence in same episodic context
+//   4. Community boost   (weight: 0.10) — same community via Label Propagation
+//   5. Temporal decay    (multiplicative) — exponential recency bias on non-global results
 //
-// Post-processing: MMR diversity re-ranking, scope filtering, confidence check
+// Post-processing: tool usage boost, cross-encoder rerank, MMR diversity re-ranking
 
 import type { GraphClient } from "../graph/client";
 import { embed } from "../embedding";
+import { rerank } from "./rerank";
+
 
 export type SearchResult = {
   uuid: string;
@@ -32,6 +36,7 @@ export type SearchOptions = {
   scope?: "global" | "project" | "session";
   limit?: number;
   project_id?: string;
+  session_id?: string;
 };
 
 const HALF_LIFE_DAYS = 30;
@@ -252,7 +257,7 @@ export async function search(
     }));
   }
 
-  base.forEach((item) => add(item, 0.5));
+  base.forEach((item) => add(item, 0.40));
 
   // --- Graph traversal ---
   const ids = base.map((item) => item.uuid).slice(0, limit * 2);
@@ -289,7 +294,102 @@ export async function search(
           confidence: row.confidence as string,
           score: boost,
         },
-        0.3,
+        0.25,
+      );
+    }
+  }
+
+  // --- Episode coherence ---
+  // If the query mentions entities that appeared together in recent episodes,
+  // boost other entities from those same episodes.
+  const candidateIds = [...out.keys()].slice(0, limit * 2);
+  if (candidateIds.length > 0) {
+    const episodeResult = (await db.roQuery(
+      `UNWIND $ids AS id
+       MATCH (e:Entity {uuid: id})<-[:MENTIONS]-(ep:Episode)
+       WITH ep, e
+       ORDER BY ep.created_at DESC
+       LIMIT $ep_limit
+       MATCH (ep)-[:MENTIONS]->(co:Entity)
+       WHERE co.expired_at IS NULL
+         AND co.uuid <> e.uuid
+         AND (co.scope = 'global' OR co.project_id = $project_id)
+       RETURN DISTINCT co.uuid AS uuid, co.name AS name,
+              co.label_type AS label_type, co.summary AS summary,
+              co.created_at AS created_at, co.scope AS scope,
+              co.confidence AS confidence, ep.created_at AS ep_created_at
+       LIMIT $limit`,
+      {
+        ids: candidateIds,
+        project_id: options.project_id ?? "default",
+        ep_limit: limit * 3,
+        limit: limit * 4,
+      },
+    )) as { data: Record<string, unknown>[] };
+
+    const now2 = Date.now();
+    for (const row of episodeResult.data ?? []) {
+      const epAge = decay(Number(row.ep_created_at ?? 0), now2);
+      add(
+        {
+          uuid: row.uuid as string,
+          name: row.name as string,
+          type: row.label_type as string,
+          summary: row.summary as string,
+          created_at: row.created_at as number,
+          scope: row.scope as string,
+          confidence: row.confidence as string,
+          score: epAge,
+        },
+        0.15,
+      );
+    }
+  }
+
+  // --- Community boost ---
+  // Entities in the same community as top results get a small boost.
+  // Single batched query replaces N+1 communityMembers() calls.
+  const topIds = [...out.entries()]
+    .sort((a, b) => b[1].score - a[1].score)
+    .slice(0, 5)
+    .map(([id]) => id);
+  if (topIds.length > 0) {
+    const knownIds = new Set(out.keys());
+    const communityResult = (await db.roQuery(
+      `UNWIND $ids AS id
+       MATCH (seed:Entity {uuid: id})
+       WHERE seed.community_id IS NOT NULL
+       WITH COLLECT(DISTINCT seed.community_id) AS cids
+       UNWIND cids AS cid
+       MATCH (e:Entity {community_id: cid})
+       WHERE e.expired_at IS NULL
+         AND (e.scope = 'global' OR e.project_id = $project_id)
+       RETURN DISTINCT e.uuid AS uuid, e.name AS name, e.label_type AS label_type,
+              e.summary AS summary, e.created_at AS created_at,
+              e.scope AS scope, e.confidence AS confidence
+       LIMIT $limit`,
+      {
+        ids: topIds,
+        project_id: options.project_id ?? "default",
+        limit: 50,
+      },
+    )) as { data: Record<string, unknown>[] };
+
+    for (const row of communityResult.data ?? []) {
+      const uuid = row.uuid as string;
+      if (knownIds.has(uuid)) continue;
+      add(
+        {
+          uuid,
+          name: row.name as string,
+          type: row.label_type as string,
+          summary: row.summary as string,
+          created_at: row.created_at as number,
+          scope: row.scope as string,
+          confidence: row.confidence as string,
+          score: 1.0,
+        },
+        0.10,
       );
     }
   }
@@ -332,5 +432,18 @@ export async function search(
     if (b.score !== a.score) return b.score - a.score;
     return a.uuid.localeCompare(b.uuid);
   });
-  return rerankMMR(ranked, limit);
+
+  // --- Cross-encoder reranking (optional) ---
+  const candidates = ranked.slice(0, limit * 2);
+  const reranked = await rerank(options.query, candidates);
+  const byUuid = new Map(candidates.map((r) => [r.uuid, r]));
+  const merged = reranked.map((r) => {
+    const original = byUuid.get(r.uuid);
+    return {
+      ...(original ?? r),
+      score: r.rerank_score,
+    } as SearchResult;
+  });
+
+  return rerankMMR(merged, limit);
 }

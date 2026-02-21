@@ -61,6 +61,7 @@ describe("cxdb sqlite conformance", () => {
     db.close();
     expect(names.map((item) => item.name)).toEqual([
       "cxdb_blob",
+      "cxdb_bundle",
       "cxdb_context",
       "cxdb_meta",
       "cxdb_registry",
@@ -136,7 +137,7 @@ describe("cxdb sqlite conformance", () => {
       type_version: 1,
       payload: { n: 2 },
     });
-    const child = log.forkContext({ from_context_id: base.context_id });
+    const child = log.forkContext({ from_turn_id: b.turn_id });
     expect(child.head_turn_id).toBe(b.turn_id);
 
     const d = log.append({
@@ -149,6 +150,32 @@ describe("cxdb sqlite conformance", () => {
     expect(log.head(base.context_id)).toBe(b.turn_id);
     expect(log.head(child.context_id)).toBe(d.turn_id);
     expect(a.turn_id).toBeLessThan(b.turn_id);
+    log.close();
+  });
+
+  test("fork from arbitrary turn uses that turn as new head", () => {
+    const log = open("fork-arbitrary-turn");
+    const base = log.createContext();
+    const turns = [1, 2, 3, 4].map((n) =>
+      log.append({
+        context_id: base.context_id,
+        type_id: MUTATION_TYPE.MEMORY_EXTRACTION_BATCH,
+        type_version: 1,
+        payload: { n },
+      }),
+    );
+    const branch = log.forkContext({ from_turn_id: turns[1]!.turn_id });
+    expect(branch.head_turn_id).toBe(turns[1]!.turn_id);
+
+    const next = log.append({
+      context_id: branch.context_id,
+      type_id: MUTATION_TYPE.MEMORY_EXTRACTION_BATCH,
+      type_version: 1,
+      payload: { n: 10 },
+    });
+    expect(next.parent_turn_id).toBe(turns[1]!.turn_id);
+    expect(log.head(base.context_id)).toBe(turns[3]!.turn_id);
+    expect(log.head(branch.context_id)).toBe(next.turn_id);
     log.close();
   });
 

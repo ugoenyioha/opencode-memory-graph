@@ -4,6 +4,7 @@ import path from "node:path";
 import { sqlite } from "./sqlite";
 import { MUTATION_TYPE } from "./types";
 import { serveCxdb } from "./server";
+import type { GraphClient } from "../graph/client";
 
 const root = path.join(process.cwd(), ".tmp", "p6-server");
 const file = path.join(root, "truth.sqlite");
@@ -34,6 +35,12 @@ describe("cxdb compatibility server", () => {
     const health = await fetch(`${base}/health`).then((res) => res.json());
     expect(health.status).toBe("ok");
 
+    const schema = await fetch(`${base}/v1/schema`).then((res) => res.json());
+    expect(schema.openapi).toBe("3.1.0");
+    expect(schema.paths["/v1/search"]).toBeTruthy();
+    expect(schema.paths["/v1/import"]).toBeTruthy();
+    expect(schema.paths["/v1/export"]).toBeTruthy();
+
     const contexts = await fetch(`${base}/v1/contexts`).then((res) =>
       res.json(),
     );
@@ -41,12 +48,140 @@ describe("cxdb compatibility server", () => {
     const id = contexts.contexts[0]?.context_id;
     expect(id).toBeTruthy();
 
-    const turns = await fetch(`${base}/v1/contexts/${id}/turns?limit=10`).then(
-      (res) => res.json(),
-    );
+    const turns = await fetch(
+      `${base}/v1/contexts/${id}/turns?limit=10&view=raw`,
+    ).then((res) => res.json());
     expect(Array.isArray(turns.turns)).toBe(true);
     expect(turns.turns.length).toBe(1);
 
+    const healthz = await fetch(`${base}/healthz`).then((res) => res.json());
+    expect(healthz.status).toBe("ok");
+
+    const detail = await fetch(`${base}/v1/contexts/${id}`).then((res) =>
+      res.json(),
+    );
+    expect(detail.context_id).toBe(String(id));
+
+    const children = await fetch(`${base}/v1/contexts/${id}/children`).then(
+      (res) => res.json(),
+    );
+    expect(Array.isArray(children.children)).toBe(true);
+
+    const provenance = await fetch(`${base}/v1/contexts/${id}/provenance`).then(
+      (res) => res.json(),
+    );
+    expect(provenance.context_id).toBe(String(id));
+
+    const search = await fetch(`${base}/v1/contexts/search?q=${id}`).then(
+      (res) => res.json(),
+    );
+    expect(Array.isArray(search.contexts)).toBe(true);
+
+    const hash = turns.turns[0]?.content_hash_b3;
+    expect(typeof hash).toBe("string");
+    const blob = await fetch(`${base}/v1/blobs/${hash}`);
+    expect(blob.status).toBe(200);
+
+    const fs = await fetch(
+      `${base}/v1/turns/${turns.turns[0]?.turn_id}/fs`,
+    ).then((res) => res.json());
+    expect(Array.isArray(fs.entries)).toBe(true);
+
+    const put = await fetch(`${base}/v1/registry/bundles/sqlite-local`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        types: {
+          "memory.entity.upsert": {
+            versions: {
+              "1": { fields: ["name"] },
+            },
+          },
+        },
+      }),
+    });
+    expect([201, 204]).toContain(put.status);
+
+    const bundle = await fetch(`${base}/v1/registry/bundles/sqlite-local`).then(
+      (res) => res.json(),
+    );
+    expect(bundle.types).toBeTruthy();
+
+    const list = await fetch(`${base}/v1/registry/types`).then((res) =>
+      res.json(),
+    );
+    expect(Array.isArray(list.types)).toBe(true);
+
+    const version = await fetch(
+      `${base}/v1/registry/types/memory.entity.upsert/versions/1`,
+    ).then((res) => res.json());
+    expect(version.type_id).toBe("memory.entity.upsert");
+
+    const exported = await fetch(`${base}/v1/export?context_id=${id}`);
+    expect(exported.status).toBe(200);
+    expect(exported.headers.get("content-type")).toContain(
+      "application/x-ndjson",
+    );
+    const jsonl = await exported.text();
+    const rows = jsonl
+      .trim()
+      .split("\n")
+      .filter((item) => item.length > 0)
+      .map((item) => JSON.parse(item));
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.type_id).toBe("memory.entity.upsert");
+
+    const imported = await fetch(`${base}/v1/import`, {
+      method: "POST",
+      headers: { "content-type": "application/x-ndjson" },
+      body: jsonl,
+    }).then((res) => res.json());
+    expect(imported.turns_imported).toBe(1);
+    expect(Array.isArray(imported.errors)).toBe(true);
+    const importedTurns = await fetch(
+      `${base}/v1/contexts/${imported.context_id}/turns?limit=10&view=typed`,
+    ).then((res) => res.json());
+    expect(importedTurns.turns.length).toBe(1);
+
+    const searchV1 = await fetch(`${base}/v1/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "server" }),
+    });
+    expect(searchV1.status).toBe(501);
+
+    const sse = await fetch(`${base}/v1/events`);
+    expect(sse.status).toBe(200);
+    const reader = sse.body?.getReader();
+    expect(reader).toBeTruthy();
+    await reader?.cancel();
+
+    server.stop(true);
+  });
+
+  test("supports hybrid search endpoint when graph is wired", async () => {
+    const graph: GraphClient = {
+      query: async () => ({ data: [] }),
+      roQuery: async () => ({ data: [] }),
+      close: async () => undefined,
+    };
+    const server = serveCxdb({ path: file, port: 0, graph, project_id: "p6" });
+    const base = `http://127.0.0.1:${server.port}`;
+
+    const out = await fetch(`${base}/v1/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        query: "server",
+        type: "artifact",
+        after: 0,
+        before: Date.now(),
+        limit: 10,
+      }),
+    }).then((res) => res.json());
+
+    expect(Array.isArray(out.results)).toBe(true);
+    expect(out.count).toBe(0);
     server.stop(true);
   });
 });
