@@ -15,7 +15,8 @@
     "test": "bun test",
     "lint": "biome check src/",
     "dryrun:interfaces": "bun scripts/e2e-interfaces-dry-run.ts",
-    "soak:remote": "bun scripts/remote-soak.ts"
+    "soak:remote": "bun scripts/remote-soak.ts",
+    "worker:queue": "bun scripts/queue-worker.ts"
   },
   "exports": {
     ".": {

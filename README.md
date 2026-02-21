@@ -33,10 +33,14 @@ What works now:
 - persistent memory writes with deterministic IDs and idempotent mutation handling
 - memory retrieval via `memory_search` and `memory_get`
 - hybrid ranking (graph traversal + vector/FTS fallback + temporal scoring + deterministic ordering)
+- retrieval weighting informed by recorded tool usage signals
 - proactive warning surfacing (opt-in with `MEMORY_GRAPH_PROACTIVE=1`)
 - scope isolation (project/global controls) and guarded global writes
 - protected-lesson quarantine and supersede lifecycle handling
 - working-tier and pre-compaction memory hooks
+- queue-backed extraction path with hook-driven draining
+- tool usage tracking records for future relevance tuning
+- optional standalone queue worker mode (`bun run worker:queue`)
 
 Validation run in this repo:
 
@@ -86,18 +90,19 @@ export MEMORY_EMBEDDINGS="off" # off | local | cloud
 
 - local mode is the most exercised path
 - remote mode is functional and documented, but still depends on your deployment quality
-- `tool.execute.after` tracking is still a TODO placeholder
+- queue worker uses retry backoff for transient failures; operator-facing queue health reporting is still minimal
 
 ## Documentation
 
-| Document                                      | What it covers                                                          |
-| --------------------------------------------- | ----------------------------------------------------------------------- |
-| [Usage](docs/usage.md)                        | Setup, config, local/remote behavior, troubleshooting                   |
-| [Orbstack E2E](docs/e2e-opencode-orbstack.md) | Repeatable bring-up, verification, and teardown workflow                |
-| [Plan Conformance](docs/plan-conformance.md)  | Roadmap-phase and deferred-item audit against implementation            |
-| [Design](docs/design.md)                      | Architecture, lifecycle hooks, retrieval pipeline, tier model           |
-| [Ontology](docs/ontology.md)                  | Entity/relationship schema and label packs                              |
-| [Research](docs/research.md)                  | Comparative analysis of existing memory approaches and design rationale |
+| Document                                                           | What it covers                                                                   |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| [Usage](docs/usage.md)                                             | Setup, config, local/remote behavior, troubleshooting                            |
+| [Orbstack E2E](docs/e2e-opencode-orbstack.md)                      | Repeatable bring-up, verification, and teardown workflow                         |
+| [Plan Conformance](docs/plan-conformance.md)                       | Roadmap-phase and deferred-item audit against implementation                     |
+| [Feature Consolidation Audit](docs/feature-consolidation-audit.md) | Cross-product feature validation, missed-feature analysis, adopt/defer decisions |
+| [Design](docs/design.md)                                           | Architecture, lifecycle hooks, retrieval pipeline, tier model                    |
+| [Ontology](docs/ontology.md)                                       | Entity/relationship schema and label packs                                       |
+| [Research](docs/research.md)                                       | Comparative analysis of existing memory approaches and design rationale          |
 
 ## License
 

@@ -21,6 +21,12 @@ export type SearchResult = {
   confidence?: string;
 };
 
+type UsageRow = {
+  tool: string;
+  count: number;
+  updated_at: number;
+};
+
 export type SearchOptions = {
   query: string;
   scope?: "global" | "project" | "session";
@@ -31,6 +37,8 @@ export type SearchOptions = {
 const HALF_LIFE_DAYS = 30;
 const LAMBDA = Math.LN2 / HALF_LIFE_DAYS;
 const MMR_LAMBDA = 0.7;
+const USAGE_HALF_LIFE_DAYS = 14;
+const USAGE_LAMBDA = Math.LN2 / USAGE_HALF_LIFE_DAYS;
 
 const STOP = new Set([
   "a",
@@ -73,6 +81,40 @@ function words(value: string) {
     .replace(/[^a-z0-9\s]/g, " ")
     .split(/\s+/)
     .filter((item) => item.length > 2 && !STOP.has(item));
+}
+
+function usageDecay(updatedAt: number, now: number) {
+  const days = (now - updatedAt) / 86_400_000;
+  return Math.exp(-USAGE_LAMBDA * Math.max(days, 0));
+}
+
+function usageSignal(rows: UsageRow[], now: number) {
+  const list = rows.map((row) => ({
+    ...row,
+    score: Math.log1p(Math.max(row.count, 0)) * usageDecay(row.updated_at, now),
+  }));
+  const max = Math.max(...list.map((item) => item.score), 0);
+  if (max <= 0) return list.map((item) => ({ ...item, score: 0 }));
+  return list.map((item) => ({ ...item, score: item.score / max }));
+}
+
+export function applyUsageBoost(
+  list: SearchResult[],
+  rows: UsageRow[],
+  now = Date.now(),
+) {
+  if (list.length === 0 || rows.length === 0) return list;
+  const usage = usageSignal(rows, now);
+  return list.map((item) => {
+    const text = `${item.name} ${item.summary}`;
+    const relevance = usage.reduce((best, row) => {
+      const value = overlap(text, row.tool);
+      if (value > best) return value * row.score;
+      return best;
+    }, 0);
+    if (relevance <= 0) return item;
+    return { ...item, score: item.score * (1 + 0.15 * relevance) };
+  });
 }
 
 export function expandQuery(value: string) {
@@ -266,6 +308,25 @@ export async function search(
   if (options.scope) {
     vectorResults = vectorResults.filter((r) => r.scope === options.scope);
   }
+
+  // --- Tool usage weighting ---
+  const usage = (await db.roQuery(
+    `MATCH (u:ToolUsage)
+     WHERE u.project_id = $project_id
+     RETURN u.tool AS tool, u.count AS count, u.updated_at AS updated_at
+     ORDER BY u.updated_at DESC
+     LIMIT 20`,
+    { project_id: options.project_id ?? "default" },
+  )) as { data: Record<string, unknown>[] };
+  vectorResults = applyUsageBoost(
+    vectorResults,
+    (usage.data ?? []).map((row) => ({
+      tool: String(row.tool ?? ""),
+      count: Number(row.count ?? 0),
+      updated_at: Number(row.updated_at ?? 0),
+    })),
+    now,
+  );
 
   const ranked = vectorResults.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;

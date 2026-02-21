@@ -72,7 +72,7 @@ Switching modes requires only a config change. The graph schema and all queries 
 The plugin uses OpenCode's plugin API to hook into lifecycle events and register tools.
 
 > [!IMPORTANT]
-> **Current MVP runtime hooks differ from the target architecture table below.** Active hooks today are `experimental.chat.system.transform`, `chat.message`, `experimental.session.compacting`, and `tool.execute.after` (placeholder TODO). Message extraction writes synchronously per message. Pre-compaction snapshot persistence is implemented with idempotent dedupe, but there is still no background extraction queue.
+> **Current MVP runtime hooks differ from the target architecture table below.** Active hooks today are `experimental.chat.system.transform`, `chat.message`, `experimental.session.compacting`, and `tool.execute.after`. Message ingestion is queue-backed with hook-driven draining (micro-batches), not a standalone worker process.
 
 ### Hooks
 
@@ -131,7 +131,7 @@ In addition to reactive search, the plugin proactively surfaces `Lesson` entitie
 
 This is how the plugin prevents the user from going down a known bad path without being asked.
 
-**Current status:** Proactive checker code exists in `src/plugin/proactive.ts` but is not wired to `message.create` hooks in `src/index.ts`.
+**Current status:** Proactive checker is wired in `src/index.ts` and enabled with `MEMORY_GRAPH_PROACTIVE=1`.
 
 ---
 
@@ -215,11 +215,17 @@ The plugin extracts entities and relationships from conversations automatically.
 
 ### Extraction strategy
 
-On each `message.create` hook, the plugin queues the message for async processing. A background worker:
+On each `message.create` hook, the plugin enqueues a sanitized raw-message memory item and drains pending queue items in hook-driven micro-batches.
 
-1. Sends the message (with recent context) to the LLM with an extraction prompt
-2. The LLM returns structured JSON: entities found, relationships between them, and any updates to existing entities
-3. The plugin merges these into the graph (deduplicating by name + type, updating summaries, adding new edges)
+Current MVP behavior:
+
+1. Message text is redacted and written as a `Concept` memory with deterministic mutation keying.
+2. Queue items are drained via `chat.message` (sync mode) and `tool.execute.after` (micro-batch mode).
+3. Merges remain idempotent via mutation reservation/commit flow.
+
+Planned evolution:
+
+- Add a standalone queue worker mode and richer extraction transforms.
 
 The extraction prompt is assembled dynamically from the active domain packs. Core labels (Decision, Lesson, Preference, Task, Concept) are always present. Each active pack contributes additional labels, examples, and extraction hints. For instance, with the `coding` + `ops` packs active, the prompt knows to look for:
 
@@ -233,7 +239,7 @@ The extraction prompt is assembled dynamically from the active domain packs. Cor
 
 ### Deduplication
 
-Entity deduplication uses name embedding similarity (threshold: 0.9). If a new entity matches an existing one, the existing entity's summary is updated and a new edge is added rather than creating a duplicate node.
+Current deduplication is deterministic ID + mutation-key based idempotency. This prevents duplicate writes across retries and repeated hook events.
 
 ### Bootstrap
 

@@ -58,6 +58,12 @@ bun run build
 - `MEMORY_GRAPH_PROACTIVE`
   - `1` enables proactive lesson surfacing during `chat.message` processing.
   - default is disabled (`0` / unset).
+- `MEMORY_GRAPH_QUEUE_MODE`
+  - `sync` (default): enqueue + immediate single-item drain in `chat.message`.
+  - `async`: enqueue only in `chat.message`; rely on hook traffic or worker process to drain.
+- `MEMORY_GRAPH_QUEUE_INTERVAL_MS` / `MEMORY_GRAPH_QUEUE_BATCH` / `MEMORY_GRAPH_PROJECT_ID`
+  - Used by standalone worker mode (`bun run worker:queue`) to control poll interval, batch size, and project scope.
+  - Failed queue items are retried with exponential backoff up to a capped attempt count.
 
 ### Environment variables (test-only)
 
@@ -113,6 +119,13 @@ export MEMORY_EMBEDDINGS="off"
    - `memory_search` to scan relevant memories
    - `memory_get` to fetch details by UUID
 4. Confirm memory writes by checking that new project-scoped entities appear in subsequent `memory_search` results.
+
+Optional worker mode for async queue draining:
+
+```bash
+export MEMORY_GRAPH_QUEUE_MODE="async"
+bun run worker:queue
+```
 
 ## Remote quickstart workflow (advanced)
 

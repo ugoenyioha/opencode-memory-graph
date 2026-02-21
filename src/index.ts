@@ -1,12 +1,13 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { runtime } from "./config";
-import { merge } from "./extraction";
 import { connect } from "./graph/client";
 import { schema } from "./graph/schema";
 import { precompact } from "./plugin/compaction";
 import { check, format as warnings } from "./plugin/proactive";
+import { drain, enqueue } from "./plugin/queue";
 import { cap, core, format, working } from "./plugin/tiers";
+import { record, toolName } from "./plugin/usage";
 import { search } from "./search/hybrid";
 import { neutralize, redact, sanitize } from "./security/redact";
 
@@ -163,33 +164,21 @@ export const MemoryPlugin: Plugin = async (ctx) => {
         .join("\n")
         .trim();
       if (!text) return;
-      await merge(
-        db,
-        {
-          entities: [
-            {
-              action: "create",
-              name: `message:${input.sessionID}:${input.messageID ?? "unknown"}`,
-              label_type: "Concept",
-              summary: redact(text).slice(0, 2000),
-              scope: "project",
-              source: "auto",
-              confidence: "suspected",
-              attributes: {
-                kind: "raw_message",
-                session_id: input.sessionID,
-              },
-            },
-          ],
-          relationships: [],
-        },
-        {
-          scope: "project",
+      const messageID = input.messageID ?? String(Date.now());
+      await enqueue(db, {
+        project_id: projectID,
+        session_id: input.sessionID,
+        message_id: messageID,
+        text: redact(text),
+      });
+      const mode = process.env.MEMORY_GRAPH_QUEUE_MODE === "async";
+      if (!mode) {
+        await drain(db, {
           project_id: projectID,
-          mutation_key: `${input.sessionID}:${input.messageID ?? Date.now()}`,
           packs: cfg.packs,
-        },
-      );
+          limit: 1,
+        });
+      }
 
       if (!cfg.proactive.enabled) return;
       const list = await check(db, text);
@@ -213,8 +202,18 @@ export const MemoryPlugin: Plugin = async (ctx) => {
     },
 
     // Track tool usage patterns
-    "tool.execute.after": async (_input, _output) => {
-      // TODO: record tool usage for pattern detection
+    "tool.execute.after": async (input, _output) => {
+      const name = toolName(input);
+      await record(db, {
+        project_id: projectID,
+        session_id: (input as { sessionID?: string })?.sessionID,
+        tool: name,
+      });
+      await drain(db, {
+        project_id: projectID,
+        packs: cfg.packs,
+        limit: 3,
+      });
     },
   };
 };

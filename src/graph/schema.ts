@@ -29,6 +29,16 @@ const rangeIndexes = [
   `CREATE INDEX FOR (q:Quarantine) ON (q.uuid)`,
   `CREATE INDEX FOR (q:Quarantine) ON (q.entity_uuid)`,
   `CREATE INDEX FOR (q:Quarantine) ON (q.created_at)`,
+  // Queue
+  `CREATE INDEX FOR (q:QueueItem) ON (q.uuid)`,
+  `CREATE INDEX FOR (q:QueueItem) ON (q.project_id)`,
+  `CREATE INDEX FOR (q:QueueItem) ON (q.status)`,
+  `CREATE INDEX FOR (q:QueueItem) ON (q.created_at)`,
+  // Tool usage
+  `CREATE INDEX FOR (u:ToolUsage) ON (u.uuid)`,
+  `CREATE INDEX FOR (u:ToolUsage) ON (u.project_id)`,
+  `CREATE INDEX FOR (u:ToolUsage) ON (u.tool)`,
+  `CREATE INDEX FOR (u:ToolUsage) ON (u.updated_at)`,
   // Edges
   `CREATE INDEX FOR ()-[r:RELATES_TO]-() ON (r.uuid)`,
   `CREATE INDEX FOR ()-[r:RELATES_TO]-() ON (r.name)`,

@@ -3,7 +3,7 @@ import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { connect } from "../graph/client";
 import { schema } from "../graph/schema";
-import { expandQuery, rerankMMR, search } from "./hybrid";
+import { applyUsageBoost, expandQuery, rerankMMR, search } from "./hybrid";
 
 const root = path.join(process.cwd(), ".tmp", "p4-search");
 
@@ -187,5 +187,38 @@ describe("search mvp", () => {
     );
     expect(out.length).toBe(2);
     expect(out.some((item) => item.uuid === "c")).toBe(true);
+  });
+
+  test("usage boost favors memories aligned with frequently used tools", () => {
+    const now = Date.now();
+    const out = applyUsageBoost(
+      [
+        {
+          uuid: "a",
+          name: "Shell workflow",
+          type: "Concept",
+          summary: "use bash for verification",
+          score: 1,
+        },
+        {
+          uuid: "b",
+          name: "Other memory",
+          type: "Concept",
+          summary: "unrelated note",
+          score: 1,
+        },
+      ],
+      [
+        {
+          tool: "bash",
+          count: 20,
+          updated_at: now,
+        },
+      ],
+      now,
+    );
+    expect(out.find((item) => item.uuid === "a")!.score).toBeGreaterThan(
+      out.find((item) => item.uuid === "b")!.score,
+    );
   });
 });
