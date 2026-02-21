@@ -1,0 +1,6 @@
+[test]
+
+# Only scan src/ for tests — frontend/tests/ are Playwright E2E tests
+# that must run via `npx playwright test` (from frontend/) and are
+# incompatible with Bun's built-in test runner.
+root = "./src"
