@@ -2,6 +2,13 @@
 
 Repeatable end-to-end test flow for `opencode-memory-graph` using an isolated FalkorDB in Orbstack.
 
+For local-only embedded testing (no remote DB, no cloud embeddings), use `samples/sample-memory-graph-local` with:
+
+```bash
+cd plugins/opencode-memory-graph
+bun run smoke:local -- --sample-dir ../../samples/sample-memory-graph-local
+```
+
 This runbook covers the full lifecycle:
 
 1. bring up isolated DB

@@ -137,6 +137,62 @@ export MEMORY_GRAPH_QUEUE_MODE="async"
 bun run worker:queue
 ```
 
+## Repeatable local integration fixture
+
+Use `samples/sample-memory-graph-local` for deterministic local OpenCode-interface integration checks.
+
+Baseline lane (required, embeddings off):
+
+```bash
+cd plugins/opencode-memory-graph
+bun run smoke:local -- --sample-dir ../../samples/sample-memory-graph-local
+```
+
+Optional local semantic lane (local embeddings only):
+
+```bash
+cd plugins/opencode-memory-graph
+bun run smoke:local:embeddings-local -- --sample-dir ../../samples/sample-memory-graph-local
+```
+
+The harness prints a PASS/FAIL matrix and exits non-zero on failures.
+
+### How to read matrix reports
+
+Model-matrix runs write JSON artifacts to:
+
+- `samples/sample-memory-graph-local/.local/matrix-reports/<run-id>.json`
+
+Key fields:
+
+- `verdict`: `PASS`, `PASS_WITH_WARNINGS`, or `FAIL`
+- `warning_count`: single-model failures on required scenarios
+- `blocking_count`: required scenarios failed by 2+ models
+- `rows[]`: per scenario/model evidence and timings
+- `perf`: run-level latency baseline (`e2e_ms`, `memory_search_ms`, `memory_get_ms`)
+
+Per-row interpretation:
+
+- `scenario`: scenario id (`S*`/`T*`)
+- `model`: model id, or `system` for non-model advanced checks
+- `required`: required vs advanced gate
+- `impact`: `none`, `warning`, `blocking`
+- `class`: `provider/config`, `plugin/runtime`, or `test-harness`
+- `duration_ms`: end-to-end scenario duration
+- `memory_search_ms`, `memory_get_ms`: tool-level latencies (when present)
+
+Pass policy:
+
+- block only when 2+ models fail the same required scenario
+- always surface single-model failures as warnings
+
+Perf comparison baseline (for backend A/B, including future SurrealDB):
+
+- compare `perf.e2e_ms.p50/p95`
+- compare `perf.memory_search_ms.p50/p95`
+- compare `perf.memory_get_ms.p50/p95`
+- compare warning/blocking counts between runs
+
 Truthlog operational commands:
 
 ```bash
