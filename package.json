@@ -19,6 +19,7 @@
     "smoke:local": "bun scripts/smoke-local-opencode.ts",
     "smoke:local:embeddings-local": "bun scripts/smoke-local-opencode.ts --embeddings-local",
     "smoke:local:model-matrix": "bun scripts/smoke-local-model-matrix.ts",
+    "smoke:local:wave-ledger": "bun scripts/wave-ledger.ts",
     "worker:queue": "bun scripts/queue-worker.ts",
     "rebuild:graph": "bun scripts/rebuild-graph.ts",
     "check:integrity": "bun scripts/integrity-check.ts",

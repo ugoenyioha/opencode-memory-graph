@@ -48,7 +48,7 @@ function parseGet(raw: string) {
 
 async function run() {
   if (clean) {
-    await rm(path.resolve(sampleDir, ".local"), { recursive: true, force: true })
+    await rm(memoryDir, { recursive: true, force: true })
   }
   await mkdir(memoryDir, { recursive: true })
 
