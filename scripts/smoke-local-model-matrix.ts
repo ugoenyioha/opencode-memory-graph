@@ -19,6 +19,8 @@ type Row = {
   duration_ms: number
   memory_search_ms?: number
   memory_get_ms?: number
+  policy_checks?: Partial<Record<"P1" | "P2" | "P3" | "P4" | "P5" | "P6" | "P7" | "P8", "PASS" | "FAIL" | "N/A">>
+  policy_advisory_failures?: string[]
 }
 
 const sampleDir =
@@ -35,7 +37,7 @@ const lockPath = path.resolve(sampleDir, ".local", "matrix.lock")
 const runMemoryPath = path.resolve("/tmp", "mgm", runID)
 
 const models = [
-  "anthropic/claude-sonnet-4-5",
+  "anthropic/claude-opus-4-6",
   "openai/gpt-5.3-codex",
   "google/gemini-3.1-pro-preview",
 ]
@@ -164,10 +166,103 @@ function ac(text: string, key: string) {
   return text.includes(`PASS ${key}`)
 }
 
+function parseSearchCount(evidence: string) {
+  const match = evidence.match(/search_results=(\d+)/)
+  return match ? Number(match[1]) : -1
+}
+
+function evaluatePolicy(row: Row) {
+  const checks: Row["policy_checks"] = {}
+  const failures: string[] = []
+  const fail = (key: keyof NonNullable<Row["policy_checks"]>, reason: string) => {
+    checks[key] = "FAIL"
+    failures.push(`${key}:${reason}`)
+  }
+  const pass = (key: keyof NonNullable<Row["policy_checks"]>) => {
+    checks[key] = "PASS"
+  }
+
+  const searchCount = parseSearchCount(row.evidence)
+
+  switch (row.scenario) {
+    case "S1":
+      row.pass ? pass("P1") : fail("P1", "memory trigger missing")
+      break
+    case "S2":
+      row.pass ? (pass("P1"), pass("P8")) : (fail("P1", "write path not retained"), fail("P8", "no grounding evidence"))
+      break
+    case "S3":
+      row.pass ? pass("P2") : fail("P2", "search->get chain failed")
+      row.pass && searchCount > 0 ? pass("P8") : fail("P8", "no grounding result from search")
+      break
+    case "S4":
+      row.pass ? (pass("P8"), pass("P3")) : (fail("P8", "no continuity evidence"), fail("P3", "weak-evidence honesty not proven"))
+      break
+    case "S5":
+      row.pass ? pass("P8") : fail("P8", "compaction grounding missing")
+      break
+    case "S6":
+      row.pass ? (pass("P5"), pass("P8")) : (fail("P5", "scope/safety signal missing"), fail("P8", "no trust-gate grounding"))
+      break
+    case "S7":
+      row.pass ? pass("P6") : fail("P6", "sanitization not demonstrated")
+      break
+    case "S8":
+      row.pass ? pass("P5") : fail("P5", "scope isolation failed")
+      break
+    case "S9":
+      row.pass ? (pass("P1"), pass("P7")) : (fail("P1", "memory not used"), fail("P7", "proportionate-use signal absent"))
+      break
+    case "S10":
+    case "S11":
+    case "S12":
+    case "T4":
+      row.pass ? pass("P8") : fail("P8", "evidence grounding failed")
+      break
+    case "T1":
+    case "T2":
+    case "T3":
+      row.pass ? (pass("P4"), pass("P8")) : (fail("P4", "temporal/conflict handling failed"), fail("P8", "temporal grounding failed"))
+      break
+    case "T5":
+      row.pass ? (pass("P3"), pass("P8")) : (fail("P3", "time-window uncertainty handling failed"), fail("P8", "window grounding failed"))
+      break
+    default:
+      break
+  }
+
+  row.policy_checks = checks
+  row.policy_advisory_failures = failures
+}
+
+function summarizePolicy(rows: Row[]) {
+  const keys = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"] as const
+  const summary: Record<string, { pass: number; fail: number; na: number }> = {}
+  for (const key of keys) summary[key] = { pass: 0, fail: 0, na: 0 }
+
+  for (const row of rows) {
+    for (const key of keys) {
+      const status = row.policy_checks?.[key] ?? "N/A"
+      if (status === "PASS") summary[key].pass += 1
+      else if (status === "FAIL") summary[key].fail += 1
+      else summary[key].na += 1
+    }
+  }
+  return summary
+}
+
 async function seedTemporal() {
   const db = await connect({ mode: "local", path: runMemoryPath })
   await schema(db)
   const now = Date.now()
+  await db.query(
+    `MERGE (e:Entity {uuid: 's3_anchor'})
+     SET e.name='s3 anchor token', e.summary='S3 deterministic anchor marker', e.label_type='Concept',
+         e.labels=['Entity','Concept'], e.attributes='{}', e.scope='project',
+         e.project_id=$project, e.source='auto', e.confidence='confirmed',
+         e.created_at=$new, e.validated_at=$new`,
+    { project: sampleDir, new: now },
+  )
   await db.query(
     `MERGE (e:Entity {uuid: 'temporal_old'})
      SET e.name='temp old marker', e.summary='TEMP OLD anchor marker', e.label_type='Concept',
@@ -356,7 +451,7 @@ async function main() {
   }
 
   if (mode === "full") {
-    const extra = models[0] ?? "anthropic/claude-sonnet-4-5"
+    const extra = models[0] ?? "anthropic/claude-opus-4-6"
 
     rows.push({
       scenario: "S2",
@@ -676,6 +771,15 @@ async function main() {
     }
   }
 
+  for (const row of rows) {
+    evaluatePolicy(row)
+  }
+  const policySummary = summarizePolicy(rows)
+  const policyAdvisoryFailures = rows.reduce(
+    (sum, row) => sum + (row.policy_advisory_failures?.length ?? 0),
+    0,
+  )
+
   const required = rows.filter((r) => r.required)
   const warnings = required.filter((r) => !r.pass && r.impact === "warning")
   const blocking = required.filter((r) => !r.pass && r.impact === "blocking")
@@ -683,8 +787,14 @@ async function main() {
 
   for (const row of rows) {
     const status = row.pass ? "PASS" : "FAIL"
+    const policy = row.policy_checks
+      ? Object.entries(row.policy_checks)
+          .map(([k, v]) => `${k}:${v}`)
+          .join(",")
+      : ""
+    const advisory = (row.policy_advisory_failures ?? []).join("|")
     console.log(
-      `${status} scenario=${row.scenario} model=${row.model} required=${row.required} impact=${row.impact} class=${row.kind} duration_ms=${row.duration_ms} reason=${row.reason} evidence=${row.evidence.replace(/\s+/g, " ").slice(0, 140)}`,
+      `${status} scenario=${row.scenario} model=${row.model} required=${row.required} impact=${row.impact} class=${row.kind} duration_ms=${row.duration_ms} reason=${row.reason} evidence=${row.evidence.replace(/\s+/g, " ").slice(0, 140)} policy=${policy} advisory=${advisory}`,
     )
   }
 
@@ -726,6 +836,8 @@ async function main() {
         verdict,
         warning_count: warnings.length,
         blocking_count: blocking.length,
+        policy_advisory_failure_count: policyAdvisoryFailures,
+        policy_summary: policySummary,
         rows,
         perf,
       },
@@ -735,7 +847,7 @@ async function main() {
   )
   console.log(`[matrix] report=${reportPath}`)
 
-  console.log(`\nSummary: required=${required.length} warning=${warnings.length} blocking=${blocking.length} verdict=${verdict}`)
+  console.log(`\nSummary: required=${required.length} warning=${warnings.length} blocking=${blocking.length} policy_advisory_failures=${policyAdvisoryFailures} verdict=${verdict}`)
 
   await cleanup()
   if (blocking.length > 0) process.exit(1)
