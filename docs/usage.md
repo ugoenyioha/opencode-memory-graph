@@ -157,6 +157,18 @@ bun run smoke:local:embeddings-local -- --sample-dir ../../samples/sample-memory
 
 The harness prints a PASS/FAIL matrix and exits non-zero on failures.
 
+## Memory usage policy
+
+The canonical policy for when and how agents should use memory tools is documented in:
+
+- `docs/memory-usage-policy.md`
+
+Runtime behavior aligned to this policy:
+
+- plugin injects memory-usage hints into system context each turn
+- tool descriptions nudge `memory_search` first, then `memory_get`
+- model matrix reports include policy-adherence evidence (advisory first, non-gating)
+
 ### How to read matrix reports
 
 Model-matrix runs write JSON artifacts to:
@@ -168,6 +180,8 @@ Key fields:
 - `verdict`: `PASS`, `PASS_WITH_WARNINGS`, or `FAIL`
 - `warning_count`: single-model failures on required scenarios
 - `blocking_count`: required scenarios failed by 2+ models
+- `policy_advisory_failure_count`: total advisory policy misses (`P1`-`P8`)
+- `policy_summary`: pass/fail/na counts per policy check key
 - `rows[]`: per scenario/model evidence and timings
 - `perf`: run-level latency baseline (`e2e_ms`, `memory_search_ms`, `memory_get_ms`)
 
@@ -180,6 +194,8 @@ Per-row interpretation:
 - `class`: `provider/config`, `plugin/runtime`, or `test-harness`
 - `duration_ms`: end-to-end scenario duration
 - `memory_search_ms`, `memory_get_ms`: tool-level latencies (when present)
+- `policy_checks`: per-row policy outcomes (`P1`-`P8`) as `PASS|FAIL|N/A`
+- `policy_advisory_failures`: advisory reasons (non-gating during rollout)
 
 Pass policy:
 
@@ -192,6 +208,30 @@ Perf comparison baseline (for backend A/B, including future SurrealDB):
 - compare `perf.memory_search_ms.p50/p95`
 - compare `perf.memory_get_ms.p50/p95`
 - compare warning/blocking counts between runs
+
+### Wave tracking
+
+Use this progression model for policy gates:
+
+- Wave 1: `P1`, `P2`, `P6`
+- Wave 2: `P5`, `P8`
+- Wave 3: `P3`, `P4`, `P7`
+
+During advisory phase, do not fail runs from policy checks alone. Promote checks only after repeated stability.
+
+Wave ledger command (recommended for promotion readiness windows):
+
+```bash
+cd plugins/opencode-memory-graph
+bun run smoke:local:wave-ledger -- --sample-dir ../../samples/sample-memory-graph-local --mode full --limit 20
+```
+
+Ledger artifacts:
+
+- `samples/sample-memory-graph-local/.local/matrix-reports/wave-ledger-latest.md`
+- `samples/sample-memory-graph-local/.local/matrix-reports/wave-ledger-latest.json`
+
+The ledger reports rolling-run confidence, advisory totals, and Wave 1/2/3 fail totals (`P1`-`P8`) for promotion decisions.
 
 Truthlog operational commands:
 
