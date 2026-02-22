@@ -167,7 +167,7 @@ Runtime behavior aligned to this policy:
 
 - plugin injects memory-usage hints into system context each turn
 - tool descriptions nudge `memory_search` first, then `memory_get`
-- model matrix reports include policy-adherence evidence (advisory first, non-gating)
+- model matrix reports include policy-adherence evidence and promoted wave status tracking
 
 ### How to read matrix reports
 
@@ -195,7 +195,7 @@ Per-row interpretation:
 - `duration_ms`: end-to-end scenario duration
 - `memory_search_ms`, `memory_get_ms`: tool-level latencies (when present)
 - `policy_checks`: per-row policy outcomes (`P1`-`P8`) as `PASS|FAIL|N/A`
-- `policy_advisory_failures`: advisory reasons (non-gating during rollout)
+- `policy_advisory_failures`: policy misses to monitor and triage
 
 Pass policy:
 
@@ -217,7 +217,21 @@ Use this progression model for policy gates:
 - Wave 2: `P5`, `P8`
 - Wave 3: `P3`, `P4`, `P7`
 
-During advisory phase, do not fail runs from policy checks alone. Promote checks only after repeated stability.
+Current rollout decision: Waves 1, 2, and 3 are promoted for delivery with monitoring.
+
+Operational gate policy remains:
+
+- block only when 2+ models fail the same required scenario
+- single-model misses remain warnings and must be reported with evidence
+
+Current benchmark decision window (full mode, latest ledger):
+
+- runs: `15`
+- fail: `0`
+- blocking runs: `0`
+- warnings total: `11`
+- wave fail totals: Wave1=`11`, Wave2=`3`, Wave3=`0`
+- perf band (recent): `e2e p50 ~4.5s-5.4s`, `e2e p95 ~11.4s-13.2s`, `memory_search p50 ~5-6ms`, `memory_get p50 ~3-4ms`
 
 Wave ledger command (recommended for promotion readiness windows):
 
@@ -231,7 +245,7 @@ Ledger artifacts:
 - `samples/sample-memory-graph-local/.local/matrix-reports/wave-ledger-latest.md`
 - `samples/sample-memory-graph-local/.local/matrix-reports/wave-ledger-latest.json`
 
-The ledger reports rolling-run confidence, advisory totals, and Wave 1/2/3 fail totals (`P1`-`P8`) for promotion decisions.
+The ledger reports rolling-run confidence, advisory totals, and Wave 1/2/3 fail totals (`P1`-`P8`) for ongoing release monitoring.
 
 Truthlog operational commands:
 

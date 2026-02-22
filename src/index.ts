@@ -23,8 +23,10 @@ function home(value: string) {
 
 const MEMORY_USAGE_POLICY = [
   "Memory usage policy:",
+  "- Be explicit and evidence-first: use memory tools to support claims, not to guess.",
   "- Use memory for non-trivial tasks: recurring bugs, design decisions, deploy/auth workflows, and preferences.",
   "- Workflow: call memory_search first, then memory_get on relevant UUIDs before making strong claims.",
+  "- If memory_search returns no relevant hits, say that clearly and avoid memory-backed certainty.",
   "- Never claim memory-backed certainty unless memory_search produced relevant evidence.",
   "- Prefer project scope context first; use global context for broad defaults.",
   "- If memory evidence is weak or conflicting, explicitly state uncertainty.",
@@ -194,12 +196,13 @@ export const MemoryPlugin: Plugin = async (ctx) => {
         output.description =
           "Search persistent memory and return ranked UUID-backed summaries. " +
           "Use this before memory_get for non-trivial tasks (decisions, incidents, preferences, auth/deploy context). " +
-          "Do not state memory-backed conclusions without relevant search evidence.";
+          "Do not state memory-backed conclusions without relevant search evidence. " +
+          "If no relevant hits are found, say so explicitly.";
       }
       if (input.toolID === "memory_get") {
         output.description =
           "Fetch full memory details for a UUID returned by memory_search. " +
-          "Do not call memory_get blindly without a relevant search hit, and do not claim retrieval if no hit exists.";
+          "Use only after a relevant memory_search hit, and do not claim retrieval if no hit exists.";
       }
     },
 

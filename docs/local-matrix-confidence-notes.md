@@ -46,6 +46,32 @@ Interpretation:
 
 - transient warning is likely non-systemic model-output variability, not persistent plugin/runtime defect.
 
+## Promotion decision (current)
+
+Waves 1, 2, and 3 are accepted for delivery with monitoring.
+
+Decision basis:
+
+- no blocking required-scenario failures in decision windows
+- prompt-guidance hardening removed deterministic Claude S1 regressions
+- remaining misses are intermittent single-model warnings (primarily Claude S7/P6)
+
+Latest ledger snapshot (full mode):
+
+- runs: 15
+- pass: 5
+- pass_with_warnings: 10
+- fail: 0
+- blocking_runs: 0
+- wave1_fail_total: 11
+- wave2_fail_total: 3
+- wave3_fail_total: 0
+
+Operational posture:
+
+- continue shipping under current block policy (2+ models same required scenario)
+- keep single-model policy misses as visible warnings and triage items
+
 ## Ledger artifacts
 
 Generated with:
